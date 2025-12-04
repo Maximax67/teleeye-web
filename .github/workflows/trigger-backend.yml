@@ -1,0 +1,20 @@
+name: Trigger API build
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send repository dispatch to API
+        env:
+          GH_TOKEN: ${{ secrets.API_REPO_TOKEN }}
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/Maximax67/teleeye-api/dispatches \
+            -d '{"event_type": "frontend_updated", "client_payload": {"ref": "${{ github.ref }}", "repo": "frontend"}}'
