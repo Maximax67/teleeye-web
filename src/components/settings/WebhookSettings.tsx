@@ -54,6 +54,7 @@ export function WebhookSettings({ botId, botName, onClose }: WebhookSettingsProp
   }, [botId]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadWebhookInfo();
   }, [loadWebhookInfo]);
 

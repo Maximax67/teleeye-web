@@ -53,25 +53,16 @@ class APIClient {
     options: RequestInit & { skipAuth?: boolean; skipRefresh?: boolean } = {},
   ): Promise<T> {
     const url = `${API_URL}${endpoint}`;
-    const headers: HeadersInit = {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...(options.headers || {}),
+      ...((options.headers as Record<string, string>) || {}),
     };
 
     if (this.tokens?.access_token && !options.skipAuth) {
-      if (headers instanceof Headers) {
-        headers.set('Authorization', `Bearer ${this.tokens.access_token}`);
-      } else if (Array.isArray(headers)) {
-        headers.push(['Authorization', `Bearer ${this.tokens.access_token}`]);
-      } else {
-        headers['Authorization'] = `Bearer ${this.tokens.access_token}`;
-      }
+      headers['Authorization'] = `Bearer ${this.tokens.access_token}`;
     }
 
-    const response = await fetch(url, {
-      ...options,
-      headers,
-    });
+    const response = await fetch(url, { ...options, headers });
 
     if (response.status === 401 && this.tokens?.refresh_token && !options.skipRefresh) {
       await this.refreshToken();
@@ -79,7 +70,6 @@ class APIClient {
     }
 
     if (!response.ok) {
-      console.log(response);
       const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
       throw new ApiError<typeof errorData>(
         response.status,
@@ -103,9 +93,7 @@ class APIClient {
       try {
         const response = await fetch(`${API_URL}/auth/refresh`, {
           method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.tokens?.refresh_token}`,
-          },
+          headers: { Authorization: `Bearer ${this.tokens?.refresh_token}` },
         });
 
         if (response.ok) {
@@ -115,7 +103,6 @@ class APIClient {
         }
 
         dbCache.clear();
-
         throw new Error('Refresh failed');
       } finally {
         this.refreshPromise = null;
@@ -126,47 +113,24 @@ class APIClient {
   }
 
   // Auth endpoints
-  async login(
-    identifier: string,
-    password: string,
-    isEmail: boolean,
-  ): Promise<{ tokens: Tokens; user: User }> {
+  async login(identifier: string, password: string, isEmail: boolean): Promise<{ tokens: Tokens; user: User }> {
     const body = isEmail ? { email: identifier, password } : { username: identifier, password };
-
     const tokens = await this.request<Tokens>('/auth/login', {
       method: 'POST',
       body: JSON.stringify(body),
       skipAuth: true,
     });
-
     this.setTokens(tokens);
     const user = await this.request<User>('/auth/me');
     return { tokens, user };
   }
 
-  async loginByUsername(email: string, password: string): Promise<{ tokens: Tokens; user: User }> {
-    const tokens = await this.request<Tokens>('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-      skipAuth: true,
-    });
-
-    this.setTokens(tokens);
-    const user = await this.request<User>('/auth/me');
-    return { tokens, user };
-  }
-
-  async register(
-    email: string,
-    username: string,
-    password: string,
-  ): Promise<{ tokens: Tokens; user: User }> {
+  async register(email: string, username: string, password: string): Promise<{ tokens: Tokens; user: User }> {
     const tokens = await this.request<Tokens>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, username, password }),
       skipAuth: true,
     });
-
     this.setTokens(tokens);
     const user = await this.request<User>('/auth/me');
     return { tokens, user };
@@ -191,11 +155,7 @@ class APIClient {
   async changePassword(email: string, oldPassword: string, newPassword: string): Promise<void> {
     await this.request('/auth/password/change', {
       method: 'POST',
-      body: JSON.stringify({
-        email,
-        old_password: oldPassword,
-        new_password: newPassword,
-      }),
+      body: JSON.stringify({ email, old_password: oldPassword, new_password: newPassword }),
     });
   }
 
@@ -205,7 +165,7 @@ class APIClient {
   }
 
   async logoutAll(): Promise<void> {
-    await this.request(`/auth/logout_all`, { method: 'POST' });
+    await this.request('/auth/logout_all', { method: 'POST' });
     this.setTokens(null);
   }
 
@@ -213,11 +173,8 @@ class APIClient {
     return this.request<User>('/auth/me');
   }
 
-  // Email verification endpoints
   async sendEmailConfirmation(): Promise<void> {
-    await this.request('/auth/email/send-confirmation', {
-      method: 'POST',
-    });
+    await this.request('/auth/email/send-confirmation', { method: 'POST' });
   }
 
   async verifyEmail(otp: string, userId: number): Promise<void> {
@@ -245,6 +202,17 @@ class APIClient {
     return this.request(url);
   }
 
+  async markChatRead(chatId: number, messageId?: number): Promise<void> {
+    try {
+      await this.request(`/telegram/chats/${chatId}/messages/read`, {
+        method: 'PUT',
+        body: JSON.stringify({ message_id: messageId ?? null }),
+      });
+    } catch {
+      // Silently fail — don't break the UI if marking fails
+    }
+  }
+
   async getChatAvatar(id: number): Promise<Blob | null> {
     try {
       const response = await this.request<Response>(`/telegram/chats/${id}/avatar`, {
@@ -252,10 +220,17 @@ class APIClient {
       });
       return response.blob();
     } catch (e) {
-      if (e instanceof ApiError && e.status === 404) {
-        return null;
-      }
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  }
 
+  async getFile(fileUniqueId: string): Promise<Blob | null> {
+    try {
+      const response = await this.request<Response>(`/telegram/files/${fileUniqueId}`);
+      return response.blob();
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 403)) return null;
       throw e;
     }
   }
@@ -296,13 +271,10 @@ class APIClient {
     });
   }
 
-  async deleteWebhook(botId: number, dropPendingUpdates: boolean = true): Promise<void> {
-    await this.request(
-      `/telegram/bots/${botId}/webhook?drop_pending_updates=${dropPendingUpdates}`,
-      {
-        method: 'DELETE',
-      },
-    );
+  async deleteWebhook(botId: number, dropPendingUpdates = true): Promise<void> {
+    await this.request(`/telegram/bots/${botId}/webhook?drop_pending_updates=${dropPendingUpdates}`, {
+      method: 'DELETE',
+    });
   }
 }
 
