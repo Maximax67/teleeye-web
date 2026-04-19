@@ -76,7 +76,7 @@ export const ChatsSidebar = ({
             <h1 className="text-lg font-bold text-gray-900 dark:text-white">TeleEye</h1>
             {totalUnread > 0 && (
               <span className="rounded-full bg-blue-500 px-1.5 py-0.5 text-[10px] leading-none font-bold text-white">
-                {totalUnread > 99 ? '99+' : totalUnread}
+                {totalUnread}
               </span>
             )}
           </div>

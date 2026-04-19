@@ -29,7 +29,7 @@ export interface ChatsResponse {
 }
 
 export function getLastReadMessageId(chat: Chat): number | null {
-  if (!chat.read_messages || chat.read_messages.length === 0) return null;
+  if (!chat.read_messages || chat.read_messages.length === 0) return 0;
   const max = Math.max(...chat.read_messages.map((r) => r.message_id));
   return max > 0 ? max : null;
 }

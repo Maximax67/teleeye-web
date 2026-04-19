@@ -106,7 +106,7 @@ export function ChatListItem({ chat, selected, onClick }: ChatListItemProps) {
 
           {unreadCount > 0 && (
             <span className="min-w-4.5 shrink-0 rounded-full bg-blue-500 px-1.5 py-0.5 text-center text-[10px] leading-none font-bold text-white">
-              {unreadCount > 99 ? '99+' : unreadCount}
+              {unreadCount > 999 ? '999+' : unreadCount}
             </span>
           )}
         </div>
