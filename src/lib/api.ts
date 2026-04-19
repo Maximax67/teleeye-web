@@ -9,9 +9,7 @@ import type {
   WebhookInfo,
 } from '@/types';
 import { dbCache } from '@/lib/indexeddb';
-import { storage } from '@/lib/storage';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+import { storage, DEFAULT_API_URL } from '@/lib/storage';
 
 // ─── Error class ─────────────────────────────────────────────────────────────
 
@@ -44,9 +42,42 @@ type RequestOptions = Omit<RequestInit, 'headers'> & {
 class APIClient {
   private tokens: Tokens | null = null;
   private refreshPromise: Promise<Tokens> | null = null;
+  private _apiUrl: string = DEFAULT_API_URL;
 
   constructor() {
     this.tokens = storage.getTokens();
+    if (typeof window !== 'undefined') {
+      this._apiUrl = storage.getApiUrl();
+    }
+  }
+
+  // ── API URL management ─────────────────────────────────────────────────────
+
+  get apiUrl(): string {
+    if (typeof window !== 'undefined') {
+      this._apiUrl = storage.getApiUrl();
+    }
+    return this._apiUrl;
+  }
+
+  setApiUrl(url: string): void {
+    const trimmed = url.trim().replace(/\/$/, '');
+    this._apiUrl = trimmed;
+    storage.setApiUrl(trimmed);
+  }
+
+  /**
+   * Tests a URL by sending a GET request and checking for HTTP 200.
+   * Returns true if the server responds with 200, false otherwise.
+   */
+  async testApiUrl(url: string): Promise<boolean> {
+    try {
+      const trimmed = url.trim().replace(/\/$/, '');
+      const response = await fetch(`${trimmed}/health`, { method: 'GET', signal: AbortSignal.timeout(5000) });
+      return response.status === 200;
+    } catch {
+      return false;
+    }
   }
 
   // ── Token management ───────────────────────────────────────────────────────
@@ -74,7 +105,7 @@ class APIClient {
       headers['Authorization'] = `Bearer ${this.tokens.access_token}`;
     }
 
-    const response = await fetch(`${API_URL}${endpoint}`, { ...init, headers });
+    const response = await fetch(`${this.apiUrl}${endpoint}`, { ...init, headers });
 
     if (response.status === 401 && this.tokens?.refresh_token && !skipRefresh) {
       await this.refreshToken();
@@ -101,7 +132,7 @@ class APIClient {
 
     this.refreshPromise = (async () => {
       try {
-        const response = await fetch(`${API_URL}/auth/refresh`, {
+        const response = await fetch(`${this.apiUrl}/auth/refresh`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${this.tokens?.refresh_token ?? ''}` },
         });

@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import Link from 'next/link';
 import AuthScaffold from '@/components/AuthScaffold';
 import InputField from '@/components/ui/InputField';
+import ApiUrlInput from '@/components/ui/ApiUrlInput';
 import { EMAIL_REGEX, PASSWORD_REGEX, USERNAME_REGEX } from '@/constants';
 
 export default function SignupPage() {
@@ -127,6 +128,10 @@ export default function SignupPage() {
         >
           Already have an account? Sign in
         </Link>
+      </div>
+
+      <div className="mt-2 border-t border-gray-100 pt-3 dark:border-gray-700">
+        <ApiUrlInput />
       </div>
     </AuthScaffold>
   );

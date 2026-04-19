@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AuthScaffold from '@/components/AuthScaffold';
 import InputField from '@/components/ui/InputField';
+import ApiUrlInput from '@/components/ui/ApiUrlInput';
 import { EMAIL_REGEX, PASSWORD_REGEX, OTP_LENGTH } from '@/constants';
 import { apiClient } from '@/lib/api';
 
@@ -154,6 +155,10 @@ export default function ResetPasswordPage() {
         <Link href="/login" className="text-sm text-red-600 hover:underline dark:text-red-400">
           Back to sign in
         </Link>
+      </div>
+
+      <div className="mt-2 border-t border-gray-100 pt-3 dark:border-gray-700">
+        <ApiUrlInput />
       </div>
     </AuthScaffold>
   );

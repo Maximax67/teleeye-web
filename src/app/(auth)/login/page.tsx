@@ -1,4 +1,3 @@
-// app/(auth)/login/page.tsx  (or wherever your LoginPage lives)
 'use client';
 
 import { useState } from 'react';
@@ -7,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import Link from 'next/link';
 import AuthScaffold from '@/components/AuthScaffold';
 import InputField from '@/components/ui/InputField';
+import ApiUrlInput from '@/components/ui/ApiUrlInput';
 import { EMAIL_REGEX, PASSWORD_REGEX, USERNAME_OR_EMAIL_REGEX } from '@/constants';
 
 export default function LoginPage() {
@@ -94,6 +94,10 @@ export default function LoginPage() {
         >
           Forgot your password?
         </Link>
+      </div>
+
+      <div className="mt-2 border-t border-gray-100 pt-3 dark:border-gray-700">
+        <ApiUrlInput />
       </div>
     </AuthScaffold>
   );

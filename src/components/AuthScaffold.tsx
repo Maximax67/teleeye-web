@@ -18,7 +18,7 @@ export default function AuthScaffold({
   const { theme, toggleTheme } = useTheme();
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-purple-50 px-4 dark:from-gray-900 dark:to-gray-800">
+    <div className="flex min-h-screen items-center justify-center bg-linear-to-br from-blue-50 to-purple-50 px-4 dark:from-gray-900 dark:to-gray-800">
       <div className="absolute top-4 right-4">
         <button
           onClick={toggleTheme}
