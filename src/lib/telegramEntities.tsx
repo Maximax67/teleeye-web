@@ -1,5 +1,7 @@
 import React from 'react';
-import { TelegramEntity } from '@/types';
+import type { TelegramEntity, Message, ForwardOrigin } from '@/types';
+
+// ─── Text segmentation ────────────────────────────────────────────────────────
 
 interface Segment {
   text: string;
@@ -7,41 +9,60 @@ interface Segment {
 }
 
 function splitIntoSegments(text: string, entities: TelegramEntity[]): Segment[] {
-  if (!entities.length) return [{ text }];
+  if (entities.length === 0) return [{ text }];
 
-  // Sort by offset
   const sorted = [...entities].sort((a, b) => a.offset - b.offset);
   const segments: Segment[] = [];
   let cursor = 0;
 
   for (const entity of sorted) {
-    // Gap before entity
     if (entity.offset > cursor) {
       segments.push({ text: text.slice(cursor, entity.offset) });
     }
-    // Entity segment
-    segments.push({
-      text: text.slice(entity.offset, entity.offset + entity.length),
-      entity,
-    });
+    segments.push({ text: text.slice(entity.offset, entity.offset + entity.length), entity });
     cursor = entity.offset + entity.length;
   }
 
-  // Trailing text
-  if (cursor < text.length) {
-    segments.push({ text: text.slice(cursor) });
-  }
+  if (cursor < text.length) segments.push({ text: text.slice(cursor) });
 
   return segments;
 }
 
-function renderSegment(segment: Segment, key: number, isOutgoing: boolean): React.ReactNode {
-  const { text, entity } = segment;
+// ─── Spoiler ──────────────────────────────────────────────────────────────────
+
+function SpoilerText({ text, isOutgoing }: { text: string; isOutgoing: boolean }) {
+  const [revealed, setRevealed] = React.useState(false);
+
+  if (revealed) return <span>{text}</span>;
+
+  return (
+    <span
+      onClick={() => setRevealed(true)}
+      className={`cursor-pointer rounded px-0.5 transition-opacity select-none hover:opacity-80 ${
+        isOutgoing
+          ? 'bg-white/30 text-transparent'
+          : 'bg-gray-800/30 text-transparent dark:bg-white/20'
+      }`}
+      title="Click to reveal"
+    >
+      {text}
+    </span>
+  );
+}
+
+// ─── Segment renderer ─────────────────────────────────────────────────────────
+
+function renderSegment(seg: Segment, key: number, isOutgoing: boolean): React.ReactNode {
+  const { text, entity } = seg;
   if (!entity) return <React.Fragment key={key}>{text}</React.Fragment>;
 
   const linkCls = isOutgoing
     ? 'underline underline-offset-2 opacity-90 hover:opacity-100'
     : 'text-blue-600 dark:text-blue-400 underline underline-offset-2 hover:opacity-80';
+
+  const mentionCls = isOutgoing
+    ? 'font-medium opacity-90'
+    : 'font-medium text-blue-600 dark:text-blue-400';
 
   switch (entity.type) {
     case 'bold':
@@ -137,36 +158,11 @@ function renderSegment(segment: Segment, key: number, isOutgoing: boolean): Reac
         </a>
       );
     case 'mention':
-      return (
-        <span
-          key={key}
-          className={
-            isOutgoing ? 'font-medium opacity-90' : 'font-medium text-blue-600 dark:text-blue-400'
-          }
-        >
-          {text}
-        </span>
-      );
     case 'hashtag':
     case 'cashtag':
-      return (
-        <span
-          key={key}
-          className={
-            isOutgoing ? 'font-medium opacity-90' : 'font-medium text-blue-600 dark:text-blue-400'
-          }
-        >
-          {text}
-        </span>
-      );
     case 'bot_command':
       return (
-        <span
-          key={key}
-          className={
-            isOutgoing ? 'font-medium opacity-90' : 'font-medium text-blue-600 dark:text-blue-400'
-          }
-        >
+        <span key={key} className={mentionCls}>
           {text}
         </span>
       );
@@ -175,25 +171,7 @@ function renderSegment(segment: Segment, key: number, isOutgoing: boolean): Reac
   }
 }
 
-function SpoilerText({ text, isOutgoing }: { text: string; isOutgoing: boolean }) {
-  const [revealed, setRevealed] = React.useState(false);
-
-  if (revealed) return <span>{text}</span>;
-
-  return (
-    <span
-      onClick={() => setRevealed(true)}
-      className={`cursor-pointer rounded px-0.5 select-none ${
-        isOutgoing
-          ? 'bg-white/30 text-transparent'
-          : 'bg-gray-800/30 text-transparent dark:bg-white/20'
-      } transition-opacity hover:opacity-80`}
-      title="Click to reveal"
-    >
-      {text}
-    </span>
-  );
-}
+// ─── Public API ───────────────────────────────────────────────────────────────
 
 export function renderTextWithEntities(
   text: string,
@@ -201,63 +179,29 @@ export function renderTextWithEntities(
   isOutgoing = false,
 ): React.ReactNode {
   if (!text) return null;
-  const safeEntities = entities || [];
-  const segments = splitIntoSegments(text, safeEntities);
-
+  const segments = splitIntoSegments(text, entities ?? []);
   return <>{segments.map((seg, i) => renderSegment(seg, i, isOutgoing))}</>;
 }
 
-export function formatBytes(bytes?: number): string {
-  if (!bytes) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-export function formatDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function getForwardLabel(msg: any): string | null {
-  if (msg.forward_origin) {
-    const o = msg.forward_origin;
-    if (o.type === 'user' && o.sender_user) {
-      const u = o.sender_user;
-      return `${u.first_name}${u.last_name ? ' ' + u.last_name : ''}`;
+export function getForwardLabel(message: Message): string | null {
+  if (message.forward_origin) {
+    const o: ForwardOrigin = message.forward_origin;
+    switch (o.type) {
+      case 'user':
+        return `${o.sender_user.first_name}${o.sender_user.last_name ? ' ' + o.sender_user.last_name : ''}`;
+      case 'hidden_user':
+        return o.sender_user_name;
+      case 'chat':
+        return o.sender_chat.title ?? 'Unknown chat';
+      case 'channel':
+        return o.chat.title ?? 'Unknown channel';
     }
-    if (o.type === 'hidden_user') return o.sender_user_name || 'Hidden user';
-    if (o.type === 'chat' && o.sender_chat) return o.sender_chat.title || 'Unknown chat';
-    if (o.type === 'channel' && o.chat) return o.chat.title || 'Unknown channel';
   }
-  if (msg.forward_from) {
-    const u = msg.forward_from;
+  if (message.forward_from) {
+    const u = message.forward_from;
     return `${u.first_name}${u.last_name ? ' ' + u.last_name : ''}`;
   }
-  if (msg.forward_from_chat) return msg.forward_from_chat.title || 'Unknown';
-  if (msg.forward_sender_name) return msg.forward_sender_name;
+  if (message.forward_from_chat?.title) return message.forward_from_chat.title;
+  if (message.forward_sender_name) return message.forward_sender_name;
   return null;
-}
-
-export function getMimeIcon(mimeType?: string): string {
-  if (!mimeType) return '📄';
-  if (mimeType.startsWith('image/')) return '🖼️';
-  if (mimeType.startsWith('video/')) return '🎬';
-  if (mimeType.startsWith('audio/')) return '🎵';
-  if (mimeType.includes('pdf')) return '📕';
-  if (
-    mimeType.includes('zip') ||
-    mimeType.includes('archive') ||
-    mimeType.includes('rar') ||
-    mimeType.includes('7z')
-  )
-    return '🗜️';
-  if (mimeType.includes('spreadsheet') || mimeType.includes('excel') || mimeType.includes('csv'))
-    return '📊';
-  if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return '📊';
-  if (mimeType.includes('word') || mimeType.includes('document')) return '📝';
-  if (mimeType.includes('text/')) return '📄';
-  return '📎';
 }

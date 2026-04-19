@@ -1,6 +1,7 @@
-import { Chat, getUnreadCount } from '@/types';
+import type { Chat } from '@/types';
+import { getUnreadCount } from '@/types';
 import { ChatAvatar } from './ChatAvatar';
-import { getChatTitle } from '@/lib/utils';
+import { getChatTitle, formatChatTime } from '@/lib/utils';
 
 interface ChatListItemProps {
   chat: Chat;
@@ -8,106 +9,98 @@ interface ChatListItemProps {
   onClick: () => void;
 }
 
-export function ChatListItem({ chat, selected, onClick }: ChatListItemProps) {
-  const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp * 1000);
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
-    const isThisYear = date.getFullYear() === now.getFullYear();
+function getLastMessagePreview(chat: Chat): { prefix: string; text: string } {
+  const msg = chat.last_message;
+  if (!msg) return { prefix: '', text: '' };
 
-    if (isToday) {
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-    if (isThisYear) {
-      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    }
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' });
-  };
-
-  const chatTitle = getChatTitle(chat);
-  const unreadCount = getUnreadCount(chat);
-
-  // Compose last message preview
-  let lastMessageText = '';
-  let lastMessagePrefix = '';
-  if (chat.last_message) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const msg = chat.last_message as any;
-    const from = chat.last_message.from;
-
-    if (from && chat.type !== 'private') {
-      lastMessagePrefix = from.first_name + (from.last_name ? ' ' + from.last_name : '');
-    }
-
-    if (chat.last_message.text) {
-      lastMessageText = chat.last_message.text;
-    } else if (chat.last_message.caption) {
-      lastMessageText = chat.last_message.caption;
-    } else {
-      // Media type label
-      const mt = chat.last_message.message_type;
-      if (mt === 'photo') lastMessageText = '📷 Photo';
-      else if (mt === 'video') lastMessageText = '🎬 Video';
-      else if (mt === 'audio') lastMessageText = '🎵 Audio';
-      else if (mt === 'voice') lastMessageText = '🎤 Voice message';
-      else if (mt === 'document') lastMessageText = `📎 ${msg?.document?.file_name || 'File'}`;
-      else if (mt === 'sticker') lastMessageText = `${msg?.sticker?.emoji || '😊'} Sticker`;
-      else if (mt === 'animation') lastMessageText = '🎭 GIF';
-      else if (mt === 'location') lastMessageText = '📍 Location';
-      else if (mt === 'contact') lastMessageText = '👤 Contact';
-      else if (mt === 'poll') lastMessageText = `📊 ${msg?.poll?.question || 'Poll'}`;
-      else if (mt === 'video_note') lastMessageText = '⭕ Video message';
-      else if (mt === 'service') {
-        if (msg?.new_chat_members?.length) lastMessageText = '👥 New members';
-        else if (msg?.left_chat_member) lastMessageText = '👋 Member left';
-        else if (msg?.new_chat_title) lastMessageText = `Chat renamed to "${msg.new_chat_title}"`;
-        else lastMessageText = 'Service message';
-      } else {
-        lastMessageText = 'Message';
-      }
-    }
+  let prefix = '';
+  if (msg.from && chat.type !== 'private') {
+    prefix = msg.from.last_name
+      ? `${msg.from.first_name} ${msg.from.last_name}`
+      : msg.from.first_name;
   }
 
-  // Determine if message is outgoing (from bot)
-  const isOutgoing = chat.last_message?.from?.is_bot;
+  let text = '';
+  if (msg.text) {
+    text = msg.text;
+  } else if (msg.caption) {
+    text = msg.caption;
+  } else {
+    const mt = msg.message_type;
+    const docName = msg.document?.file_name ?? 'File';
+    const stickerEmoji = msg.sticker?.emoji ?? '😊';
+    const pollQ = msg.poll?.question ?? 'Poll';
+
+    const TYPE_LABELS: Partial<Record<typeof mt, string>> = {
+      photo: '📷 Photo',
+      video: '🎬 Video',
+      audio: '🎵 Audio',
+      voice: '🎤 Voice message',
+      document: `📎 ${docName}`,
+      sticker: `${stickerEmoji} Sticker`,
+      animation: '🎭 GIF',
+      location: '📍 Location',
+      contact: '👤 Contact',
+      poll: `📊 ${pollQ}`,
+      video_note: '⭕ Video message',
+    };
+
+    text = TYPE_LABELS[mt] ?? 'Message';
+  }
+
+  return { prefix, text };
+}
+
+export function ChatListItem({ chat, selected, onClick }: ChatListItemProps) {
+  const chatTitle = getChatTitle(chat);
+  const unreadCount = getUnreadCount(chat);
+  const { prefix, text } = getLastMessagePreview(chat);
+  const isOutgoing = chat.last_message?.from?.is_bot ?? false;
 
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
-      className={`flex cursor-pointer items-center gap-3 px-3 py-2.5 transition-colors ${
+      className={`flex w-full cursor-pointer items-center gap-3 px-3 py-2.5 text-left transition-colors ${
         selected ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'
       }`}
     >
       <ChatAvatar chat={chat} priority={selected ? 10 : 5} />
 
       <div className="min-w-0 flex-1">
+        {/* Title row */}
         <div className="flex items-center justify-between gap-2">
           <h3
-            className={`truncate text-sm font-semibold ${selected ? 'text-blue-700 dark:text-blue-300' : 'text-gray-900 dark:text-white'}`}
+            className={`truncate text-sm font-semibold ${
+              selected ? 'text-blue-700 dark:text-blue-300' : 'text-gray-900 dark:text-white'
+            }`}
           >
             {chatTitle}
           </h3>
           {chat.last_message && (
             <span
-              className={`shrink-0 text-xs ${unreadCount > 0 ? 'font-medium text-blue-500 dark:text-blue-400' : 'text-gray-400 dark:text-gray-500'}`}
+              className={`shrink-0 text-xs ${
+                unreadCount > 0
+                  ? 'font-medium text-blue-500 dark:text-blue-400'
+                  : 'text-gray-400 dark:text-gray-500'
+              }`}
             >
-              {formatTime(chat.last_message.date)}
+              {formatChatTime(chat.last_message.date)}
             </span>
           )}
         </div>
 
+        {/* Preview row */}
         <div className="mt-0.5 flex items-center justify-between gap-1">
           <div className="flex min-w-0 items-center gap-1">
             {isOutgoing && (
               <span className="shrink-0 text-xs text-blue-500 dark:text-blue-400">✓</span>
             )}
             <p className="truncate text-xs text-gray-500 dark:text-gray-400">
-              {lastMessagePrefix && (
-                <span className="font-medium text-gray-700 dark:text-gray-300">
-                  {lastMessagePrefix}:{' '}
-                </span>
+              {prefix && (
+                <span className="font-medium text-gray-700 dark:text-gray-300">{prefix}: </span>
               )}
-              {lastMessageText}
+              {text}
             </p>
           </div>
 
@@ -118,6 +111,6 @@ export function ChatListItem({ chat, selected, onClick }: ChatListItemProps) {
           )}
         </div>
       </div>
-    </div>
+    </button>
   );
 }

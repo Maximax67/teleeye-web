@@ -1,6 +1,6 @@
-import {
+import type {
   Bot,
-  Chat,
+  ChatsResponse,
   MessagesResponse,
   Session,
   Tokens,
@@ -9,27 +9,37 @@ import {
   WebhookInfo,
 } from '@/types';
 import { dbCache } from '@/lib/indexeddb';
-import { storage } from './storage';
+import { storage } from '@/lib/storage';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
-export class ApiError<T = unknown> extends Error {
-  status: number;
-  detail: string;
-  response: T | null;
+// ─── Error class ─────────────────────────────────────────────────────────────
 
-  constructor(status: number, detail: string, response: T | null = null) {
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string;
+
+  constructor(status: number, detail: string) {
     super(detail);
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
-    this.response = response;
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, ApiError);
     }
   }
 }
+
+// ─── Internal types ───────────────────────────────────────────────────────────
+
+type RequestOptions = Omit<RequestInit, 'headers'> & {
+  headers?: Record<string, string>;
+  skipAuth?: boolean;
+  skipRefresh?: boolean;
+};
+
+// ─── APIClient ────────────────────────────────────────────────────────────────
 
 class APIClient {
   private tokens: Tokens | null = null;
@@ -39,52 +49,52 @@ class APIClient {
     this.tokens = storage.getTokens();
   }
 
-  setTokens(tokens: Tokens | null): void {
-    this.tokens = tokens;
-    storage.setTokens(tokens);
-  }
+  // ── Token management ───────────────────────────────────────────────────────
 
   getTokens(): Tokens | null {
     return this.tokens;
   }
 
-  async request<T>(
-    endpoint: string,
-    options: RequestInit & { skipAuth?: boolean; skipRefresh?: boolean } = {},
-  ): Promise<T> {
-    const url = `${API_URL}${endpoint}`;
+  setTokens(tokens: Tokens | null): void {
+    this.tokens = tokens;
+    storage.setTokens(tokens);
+  }
+
+  // ── Core request ───────────────────────────────────────────────────────────
+
+  async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+    const { skipAuth = false, skipRefresh = false, headers: extraHeaders, ...init } = options;
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...((options.headers as Record<string, string>) || {}),
+      ...extraHeaders,
     };
 
-    if (this.tokens?.access_token && !options.skipAuth) {
+    if (this.tokens?.access_token && !skipAuth) {
       headers['Authorization'] = `Bearer ${this.tokens.access_token}`;
     }
 
-    const response = await fetch(url, { ...options, headers });
+    const response = await fetch(`${API_URL}${endpoint}`, { ...init, headers });
 
-    if (response.status === 401 && this.tokens?.refresh_token && !options.skipRefresh) {
+    if (response.status === 401 && this.tokens?.refresh_token && !skipRefresh) {
       await this.refreshToken();
       return this.request<T>(endpoint, { ...options, skipRefresh: true });
     }
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-      throw new ApiError<typeof errorData>(
-        response.status,
-        errorData.detail ?? 'Request failed',
-        errorData,
-      );
+      const body = await response.json().catch(() => ({ detail: 'Request failed' }));
+      throw new ApiError(response.status, (body as { detail?: string }).detail ?? 'Request failed');
     }
 
-    const contentType = response.headers.get('content-type');
-    if (contentType?.includes('application/json')) {
-      return response.json();
+    const contentType = response.headers.get('content-type') ?? '';
+    if (contentType.includes('application/json')) {
+      return response.json() as Promise<T>;
     }
 
-    return response as T;
+    return response as unknown as T;
   }
+
+  // ── Token refresh ──────────────────────────────────────────────────────────
 
   async refreshToken(): Promise<Tokens> {
     if (this.refreshPromise) return this.refreshPromise;
@@ -93,17 +103,18 @@ class APIClient {
       try {
         const response = await fetch(`${API_URL}/auth/refresh`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${this.tokens?.refresh_token}` },
+          headers: { Authorization: `Bearer ${this.tokens?.refresh_token ?? ''}` },
         });
 
-        if (response.ok) {
-          const tokens: Tokens = await response.json();
-          this.setTokens(tokens);
-          return tokens;
+        if (!response.ok) {
+          dbCache.clear();
+          this.setTokens(null);
+          throw new ApiError(response.status, 'Refresh failed');
         }
 
-        dbCache.clear();
-        throw new Error('Refresh failed');
+        const tokens = (await response.json()) as Tokens;
+        this.setTokens(tokens);
+        return tokens;
       } finally {
         this.refreshPromise = null;
       }
@@ -112,8 +123,13 @@ class APIClient {
     return this.refreshPromise;
   }
 
-  // Auth endpoints
-  async login(identifier: string, password: string, isEmail: boolean): Promise<{ tokens: Tokens; user: User }> {
+  // ── Auth ───────────────────────────────────────────────────────────────────
+
+  async login(
+    identifier: string,
+    password: string,
+    isEmail: boolean,
+  ): Promise<{ tokens: Tokens; user: User }> {
     const body = isEmail ? { email: identifier, password } : { username: identifier, password };
     const tokens = await this.request<Tokens>('/auth/login', {
       method: 'POST',
@@ -121,19 +137,37 @@ class APIClient {
       skipAuth: true,
     });
     this.setTokens(tokens);
-    const user = await this.request<User>('/auth/me');
+    const user = await this.getMe();
     return { tokens, user };
   }
 
-  async register(email: string, username: string, password: string): Promise<{ tokens: Tokens; user: User }> {
+  async register(
+    email: string,
+    username: string,
+    password: string,
+  ): Promise<{ tokens: Tokens; user: User }> {
     const tokens = await this.request<Tokens>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, username, password }),
       skipAuth: true,
     });
     this.setTokens(tokens);
-    const user = await this.request<User>('/auth/me');
+    const user = await this.getMe();
     return { tokens, user };
+  }
+
+  async getMe(): Promise<User> {
+    return this.request<User>('/auth/me');
+  }
+
+  async logout(): Promise<void> {
+    await this.request('/auth/logout', { method: 'POST' });
+    this.setTokens(null);
+  }
+
+  async logoutAll(): Promise<void> {
+    await this.request('/auth/logout_all', { method: 'POST' });
+    this.setTokens(null);
   }
 
   async forgotPassword(email: string): Promise<void> {
@@ -159,20 +193,6 @@ class APIClient {
     });
   }
 
-  async logout(): Promise<void> {
-    await this.request('/auth/logout', { method: 'POST' });
-    this.setTokens(null);
-  }
-
-  async logoutAll(): Promise<void> {
-    await this.request('/auth/logout_all', { method: 'POST' });
-    this.setTokens(null);
-  }
-
-  async getMe(): Promise<User> {
-    return this.request<User>('/auth/me');
-  }
-
   async sendEmailConfirmation(): Promise<void> {
     await this.request('/auth/email/send-confirmation', { method: 'POST' });
   }
@@ -192,14 +212,30 @@ class APIClient {
     });
   }
 
-  // Chat endpoints
-  async getChats(page = 1, size = 50): Promise<{ items: Chat[]; total: number }> {
+  // ── Sessions ───────────────────────────────────────────────────────────────
+
+  async getSessions(): Promise<{ sessions: Session[] }> {
+    return this.request('/auth/sessions');
+  }
+
+  async revokeSession(sessionId: number): Promise<void> {
+    await this.request(`/auth/sessions/${sessionId}`, { method: 'DELETE' });
+  }
+
+  // ── Chats ──────────────────────────────────────────────────────────────────
+
+  async getChats(page = 1, size = 50): Promise<ChatsResponse> {
     return this.request(`/telegram/chats?page=${page}&size=${size}`);
   }
 
-  async getChatMessages(chatId: number, limit = 50, beforeId?: number): Promise<MessagesResponse> {
-    const url = `/telegram/chats/${chatId}/messages?limit=${limit}${beforeId ? `&before_id=${beforeId}` : ''}`;
-    return this.request(url);
+  async getChatMessages(
+    chatId: number,
+    limit = 50,
+    beforeId?: number,
+  ): Promise<MessagesResponse> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (beforeId !== undefined) params.set('before_id', String(beforeId));
+    return this.request(`/telegram/chats/${chatId}/messages?${params.toString()}`);
   }
 
   async markChatRead(chatId: number, messageId?: number): Promise<void> {
@@ -209,21 +245,21 @@ class APIClient {
         body: JSON.stringify({ message_id: messageId ?? null }),
       });
     } catch {
-      // Silently fail — don't break the UI if marking fails
+      // Non-critical – don't break the UI
     }
   }
 
   async getChatAvatar(id: number): Promise<Blob | null> {
     try {
-      const response = await this.request<Response>(`/telegram/chats/${id}/avatar`, {
-        headers: { 'Content-Type': 'image/jpeg' },
-      });
+      const response = await this.request<Response>(`/telegram/chats/${id}/avatar`);
       return response.blob();
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
     }
   }
+
+  // ── Files ──────────────────────────────────────────────────────────────────
 
   async getFile(fileUniqueId: string): Promise<Blob | null> {
     try {
@@ -235,7 +271,8 @@ class APIClient {
     }
   }
 
-  // Bot endpoints
+  // ── Bots ───────────────────────────────────────────────────────────────────
+
   async getBots(): Promise<{ bots: Bot[] }> {
     return this.request('/telegram/bots');
   }
@@ -251,14 +288,7 @@ class APIClient {
     await this.request(`/telegram/bots/${botId}`, { method: 'DELETE' });
   }
 
-  // Session endpoints
-  async getSessions(): Promise<{ sessions: Session[] }> {
-    return this.request('/auth/sessions');
-  }
-
-  async revokeSession(sessionId: number): Promise<void> {
-    await this.request(`/auth/sessions/${sessionId}`, { method: 'DELETE' });
-  }
+  // ── Webhooks ───────────────────────────────────────────────────────────────
 
   async getWebhookInfo(botId: number): Promise<WebhookInfo> {
     return this.request<WebhookInfo>(`/telegram/bots/${botId}/webhook`);
@@ -272,9 +302,10 @@ class APIClient {
   }
 
   async deleteWebhook(botId: number, dropPendingUpdates = true): Promise<void> {
-    await this.request(`/telegram/bots/${botId}/webhook?drop_pending_updates=${dropPendingUpdates}`, {
-      method: 'DELETE',
-    });
+    await this.request(
+      `/telegram/bots/${botId}/webhook?drop_pending_updates=${String(dropPendingUpdates)}`,
+      { method: 'DELETE' },
+    );
   }
 }
 

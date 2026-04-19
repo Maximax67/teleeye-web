@@ -1,50 +1,97 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
-import { MessageWithGap } from '@/types';
+import { useCallback, useEffect, useLayoutEffect, useRef, RefObject } from 'react';
+import type { MessageListItem } from '@/types';
+import type { ScrollTarget } from '@/hooks';
 import { Message } from './Message';
+import { UnreadSeparator } from './UnreadSeparator';
 
 interface MessagesListProps {
-  messages: MessageWithGap[];
-  messagesEndRef: React.RefObject<HTMLDivElement | null>;
-  messagesContainerRef: React.RefObject<HTMLDivElement | null>;
-  loading: boolean;
-  loadMore: (beforeId?: number) => void;
+  listItems: MessageListItem[];
+  messagesEndRef: RefObject<HTMLDivElement | null>;
+  messagesContainerRef: RefObject<HTMLDivElement | null>;
+  isLoadingOlder: boolean;
+  hasMoreOlder: boolean;
+  scrollTarget: ScrollTarget;
+  onScrolled: () => void;
+  loadOlderMessages: (beforeId: number) => Promise<void>;
 }
 
 export const MessagesList = ({
-  messages,
+  listItems,
   messagesEndRef,
   messagesContainerRef,
-  loading,
-  loadMore,
+  isLoadingOlder,
+  hasMoreOlder,
+  scrollTarget,
+  onScrolled,
+  loadOlderMessages,
 }: MessagesListProps) => {
-  const prevScrollHeight = useRef(0);
+  const unreadSeparatorRef = useRef<HTMLDivElement>(null);
 
-  // Preserve scroll position when prepending older messages
-  useEffect(() => {
+  // Track scroll state for restoration when prepending older messages
+  const scrollRestoreRef = useRef({ savedHeight: 0, savedTop: 0, active: false });
+
+  // ── Restore scroll position after older messages are prepended ─────────────
+  // useLayoutEffect fires synchronously after DOM mutation, before paint — no visible jump.
+  useLayoutEffect(() => {
+    const { active, savedHeight, savedTop } = scrollRestoreRef.current;
+    if (!active) return;
+
     const container = messagesContainerRef.current;
     if (!container) return;
 
-    const newScrollHeight = container.scrollHeight;
-    if (prevScrollHeight.current > 0 && newScrollHeight > prevScrollHeight.current) {
-      const delta = newScrollHeight - prevScrollHeight.current;
-      container.scrollTop = container.scrollTop + delta;
+    const heightDiff = container.scrollHeight - savedHeight;
+    if (heightDiff > 0) {
+      container.scrollTop = savedTop + heightDiff;
     }
-    prevScrollHeight.current = newScrollHeight;
-  }, [messages.length, messagesContainerRef]);
+    scrollRestoreRef.current.active = false;
+  });
 
+  // ── Scroll to target after initial load ────────────────────────────────────
+  useEffect(() => {
+    if (scrollTarget === 'none' || listItems.length === 0) return;
+
+    // rAF ensures the DOM has fully rendered the new items
+    const rafId = requestAnimationFrame(() => {
+      if (scrollTarget === 'unread' && unreadSeparatorRef.current) {
+        unreadSeparatorRef.current.scrollIntoView({ behavior: 'instant', block: 'start' });
+        // Nudge up a little to show a couple of messages before the separator
+        const container = messagesContainerRef.current;
+        if (container) container.scrollTop = Math.max(0, container.scrollTop - 80);
+      } else if (scrollTarget === 'bottom') {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      }
+      onScrolled();
+    });
+
+    return () => cancelAnimationFrame(rafId);
+    // Run only when scroll target or chat changes (listItems.length > 0 guards empty states)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollTarget, listItems.length > 0]);
+
+  // ── Infinite scroll upward ─────────────────────────────────────────────────
   const handleScroll = useCallback(() => {
     const container = messagesContainerRef.current;
-    if (!container || loading) return;
+    if (!container || isLoadingOlder || !hasMoreOlder) return;
 
-    if (container.scrollTop < 150) {
-      const oldest = messages.find((m) => !m.isGap);
-      loadMore(oldest?.message_id);
+    if (container.scrollTop < 200) {
+      const firstMessage = listItems.find((item) => item.type === 'message');
+      if (!firstMessage || firstMessage.type !== 'message') return;
+
+      // Save current scroll state BEFORE the async load triggers re-render
+      scrollRestoreRef.current = {
+        savedHeight: container.scrollHeight,
+        savedTop: container.scrollTop,
+        active: true,
+      };
+
+      void loadOlderMessages(firstMessage.message.message_id);
     }
-  }, [loading, messages, loadMore, messagesContainerRef]);
+  }, [isLoadingOlder, hasMoreOlder, listItems, loadOlderMessages, messagesContainerRef]);
 
-  if (messages.length === 0 && !loading) {
+  // ── Empty / loading state ──────────────────────────────────────────────────
+  if (listItems.length === 0 && !isLoadingOlder) {
     return (
       <div
         ref={messagesContainerRef}
@@ -65,28 +112,38 @@ export const MessagesList = ({
       className="flex-1 overflow-x-hidden overflow-y-auto"
       style={{ scrollbarWidth: 'thin' }}
     >
-      {/* Loading older messages spinner */}
-      {loading && messages.length > 0 && (
+      {/* Top loading spinner (loading older messages) */}
+      {isLoadingOlder && listItems.length > 0 && (
         <div className="flex justify-center py-3">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
         </div>
       )}
 
-      {/* Initial loading */}
-      {loading && messages.length === 0 && (
+      {/* Initial full-screen spinner */}
+      {isLoadingOlder && listItems.length === 0 && (
         <div className="flex h-full items-center justify-center">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
         </div>
       )}
 
-      {/* Messages */}
+      {/* Message list */}
       <div className="space-y-px px-3 py-3">
-        {messages.map((msg, idx) => (
-          <Message
-            key={msg.isGap ? `gap-${msg.message_id}` : `msg-${msg.message_id || idx}`}
-            message={msg}
-          />
-        ))}
+        {listItems.map((item) => {
+          if (item.type === 'unread-separator') {
+            return <UnreadSeparator key="unread-separator" ref={unreadSeparatorRef} />;
+          }
+          if (item.type === 'gap') {
+            return (
+              <div key={`gap-${item.id}`} className="my-2 flex justify-center">
+                <div className="flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-500 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
+                  <span className="h-1 w-1 rounded-full bg-red-400" />
+                  {item.gapCount} message{item.gapCount > 1 ? 's' : ''} missing
+                </div>
+              </div>
+            );
+          }
+          return <Message key={`msg-${item.id}`} message={item.message} />;
+        })}
       </div>
 
       <div ref={messagesEndRef} />
