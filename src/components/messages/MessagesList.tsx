@@ -12,9 +12,12 @@ interface MessagesListProps {
   messagesContainerRef: RefObject<HTMLDivElement | null>;
   isLoadingOlder: boolean;
   hasMoreOlder: boolean;
+  isLoadingNewer: boolean;
+  hasMoreNewer: boolean;
   scrollTarget: ScrollTarget;
   onScrolled: () => void;
   loadOlderMessages: (beforeId: number) => Promise<void>;
+  loadNewerMessages: (afterId: number) => Promise<void>;
 }
 
 export const MessagesList = ({
@@ -23,9 +26,12 @@ export const MessagesList = ({
   messagesContainerRef,
   isLoadingOlder,
   hasMoreOlder,
+  isLoadingNewer,
+  hasMoreNewer,
   scrollTarget,
   onScrolled,
   loadOlderMessages,
+  loadNewerMessages,
 }: MessagesListProps) => {
   const unreadSeparatorRef = useRef<HTMLDivElement>(null);
 
@@ -33,7 +39,6 @@ export const MessagesList = ({
   const scrollRestoreRef = useRef({ savedHeight: 0, savedTop: 0, active: false });
 
   // ── Restore scroll position after older messages are prepended ─────────────
-  // useLayoutEffect fires synchronously after DOM mutation, before paint — no visible jump.
   useLayoutEffect(() => {
     const { active, savedHeight, savedTop } = scrollRestoreRef.current;
     if (!active) return;
@@ -52,11 +57,9 @@ export const MessagesList = ({
   useEffect(() => {
     if (scrollTarget === 'none' || listItems.length === 0) return;
 
-    // rAF ensures the DOM has fully rendered the new items
     const rafId = requestAnimationFrame(() => {
       if (scrollTarget === 'unread' && unreadSeparatorRef.current) {
         unreadSeparatorRef.current.scrollIntoView({ behavior: 'instant', block: 'start' });
-        // Nudge up a little to show a couple of messages before the separator
         const container = messagesContainerRef.current;
         if (container) container.scrollTop = Math.max(0, container.scrollTop - 80);
       } else if (scrollTarget === 'bottom') {
@@ -66,31 +69,51 @@ export const MessagesList = ({
     });
 
     return () => cancelAnimationFrame(rafId);
-    // Run only when scroll target or chat changes (listItems.length > 0 guards empty states)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollTarget, listItems.length > 0]);
 
-  // ── Infinite scroll upward ─────────────────────────────────────────────────
+  // ── Infinite scroll — up (older) and down (newer) ─────────────────────────
   const handleScroll = useCallback(() => {
     const container = messagesContainerRef.current;
-    if (!container || isLoadingOlder || !hasMoreOlder) return;
+    if (!container) return;
 
-    if (container.scrollTop < 200) {
+    const { scrollTop, scrollHeight, clientHeight } = container;
+
+    // Load older on scroll near the top
+    if (!isLoadingOlder && hasMoreOlder && scrollTop < 200) {
       const firstMessage = listItems.find((item) => item.type === 'message');
-      if (!firstMessage || firstMessage.type !== 'message') return;
-
-      // Save current scroll state BEFORE the async load triggers re-render
-      scrollRestoreRef.current = {
-        savedHeight: container.scrollHeight,
-        savedTop: container.scrollTop,
-        active: true,
-      };
-
-      void loadOlderMessages(firstMessage.message.message_id);
+      if (firstMessage && firstMessage.type === 'message') {
+        scrollRestoreRef.current = {
+          savedHeight: scrollHeight,
+          savedTop: scrollTop,
+          active: true,
+        };
+        void loadOlderMessages(firstMessage.message.message_id);
+      }
     }
-  }, [isLoadingOlder, hasMoreOlder, listItems, loadOlderMessages, messagesContainerRef]);
 
-  // ── Empty / loading state ──────────────────────────────────────────────────
+    // Load newer on scroll near the bottom
+    if (!isLoadingNewer && hasMoreNewer) {
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+      if (distanceFromBottom < 200) {
+        const lastMessage = [...listItems].reverse().find((item) => item.type === 'message');
+        if (lastMessage && lastMessage.type === 'message') {
+          void loadNewerMessages(lastMessage.message.message_id);
+        }
+      }
+    }
+  }, [
+    isLoadingOlder,
+    hasMoreOlder,
+    isLoadingNewer,
+    hasMoreNewer,
+    listItems,
+    loadOlderMessages,
+    loadNewerMessages,
+    messagesContainerRef,
+  ]);
+
+  // ── Empty / initial loading state ─────────────────────────────────────────
   if (listItems.length === 0 && !isLoadingOlder) {
     return (
       <div
@@ -112,14 +135,14 @@ export const MessagesList = ({
       className="flex-1 overflow-x-hidden overflow-y-auto"
       style={{ scrollbarWidth: 'thin' }}
     >
-      {/* Top loading spinner (loading older messages) */}
+      {/* Spinner: loading older messages at the top */}
       {isLoadingOlder && listItems.length > 0 && (
         <div className="flex justify-center py-3">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
         </div>
       )}
 
-      {/* Initial full-screen spinner */}
+      {/* Full-screen spinner on initial load */}
       {isLoadingOlder && listItems.length === 0 && (
         <div className="flex h-full items-center justify-center">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
@@ -145,6 +168,13 @@ export const MessagesList = ({
           return <Message key={`msg-${item.id}`} message={item.message} />;
         })}
       </div>
+
+      {/* Spinner: loading newer messages at the bottom */}
+      {isLoadingNewer && (
+        <div className="flex justify-center py-3">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+        </div>
+      )}
 
       <div ref={messagesEndRef} />
     </div>

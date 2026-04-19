@@ -124,8 +124,10 @@ export interface Message {
 
 export interface MessagesResponse {
   items: Message[];
-  next_cursor?: number;
-  has_more: boolean;
+  /** True when there are older messages that can be loaded with before_id */
+  has_more_older: boolean;
+  /** True when there are newer messages that can be loaded with after_id */
+  has_more_newer: boolean;
 }
 
 // ─── Discriminated union for rendering ───────────────────────────────────────

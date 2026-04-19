@@ -1,41 +1,102 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { Chat } from '@/types';
 import { apiClient } from '@/lib/api';
 import { dbCache } from '@/lib/indexeddb';
 
+export interface ChatFilters {
+  search?: string;
+  chatTypes?: string[];
+  botIds?: number[];
+}
+
 export interface UseChatsReturn {
   chats: Chat[];
   loading: boolean;
-  loadChats: () => Promise<void>;
+  isLoadingMore: boolean;
+  hasMore: boolean;
+  total: number;
+  loadChats: (filters?: ChatFilters) => Promise<void>;
+  loadMore: () => Promise<void>;
   updateChatReadStatus: (chatId: number, messageId: number) => void;
 }
+
+const PAGE_SIZE = 50;
 
 export function useChats(): UseChatsReturn {
   const [chats, setChats] = useState<Chat[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [total, setTotal] = useState(0);
 
-  const loadChats = useCallback(async () => {
-    setLoading(true);
+  // Refs to track current pagination state without stale closures
+  const pageRef = useRef(1);
+  const filtersRef = useRef<ChatFilters>({});
+  const loadingRef = useRef(false);
+
+  const fetchPage = useCallback(async (
+    page: number,
+    filters: ChatFilters,
+    append: boolean,
+  ) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+
+    if (!append) setLoading(true);
+    else setIsLoadingMore(true);
+
     try {
-      // Serve cache immediately for perceived performance
-      const cached = await dbCache.getChats();
-      if (cached.length > 0) setChats(cached);
+      // For page 1 without filters, serve cache immediately
+      if (page === 1 && !append) {
+        const cached = await dbCache.getChats();
+        if (cached.length > 0) setChats(cached);
+      }
 
-      const data = await apiClient.getChats();
-      setChats(data.items);
-      dbCache.setChats(data.items);
+      const data = await apiClient.getChats(
+        page,
+        PAGE_SIZE,
+        filters.chatTypes,
+        filters.botIds,
+        filters.search,
+      );
+
+      if (append) {
+        setChats(prev => [...prev, ...data.items]);
+      } else {
+        setChats(data.items);
+        // Only cache the unfiltered first page
+        if (page === 1 && !filters.chatTypes?.length && !filters.botIds?.length && !filters.search) {
+          dbCache.setChats(data.items);
+        }
+      }
+
+      setHasMore(data.page < data.pages);
+      setTotal(data.total);
+      pageRef.current = page;
+      filtersRef.current = filters;
     } catch (err) {
       console.error('Failed to load chats:', err);
     } finally {
-      setLoading(false);
+      loadingRef.current = false;
+      if (!append) setLoading(false);
+      else setIsLoadingMore(false);
     }
   }, []);
 
+  const loadChats = useCallback(async (filters: ChatFilters = {}) => {
+    await fetchPage(1, filters, false);
+  }, [fetchPage]);
+
+  const loadMore = useCallback(async () => {
+    if (!hasMore || isLoadingMore || loadingRef.current) return;
+    await fetchPage(pageRef.current + 1, filtersRef.current, true);
+  }, [hasMore, isLoadingMore, fetchPage]);
+
   const updateChatReadStatus = useCallback((chatId: number, messageId: number) => {
-    setChats((prev) =>
-      prev.map((c) => {
+    setChats(prev =>
+      prev.map(c => {
         if (c.id !== chatId) return c;
         return {
           ...c,
@@ -45,5 +106,14 @@ export function useChats(): UseChatsReturn {
     );
   }, []);
 
-  return { chats, loading, loadChats, updateChatReadStatus };
+  return {
+    chats,
+    loading,
+    isLoadingMore,
+    hasMore,
+    total,
+    loadChats,
+    loadMore,
+    updateChatReadStatus,
+  };
 }

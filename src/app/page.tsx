@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { dbCache } from '@/lib/indexeddb';
 import type { Chat } from '@/types';
+import type { ChatFilters } from '@/hooks';
 
 import { ChatsSidebar } from '@/components/chats/ChatsSidebar';
 import { ChatHeader } from '@/components/chats/ChatHeader';
@@ -28,9 +29,18 @@ function HomeContent() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   const isMobile = useIsMobile();
-  const { chats, loadChats } = useChats();
-  const { listItems, isLoadingOlder, hasMoreOlder, scrollTarget, onScrolled, loadOlderMessages } =
-    useMessages(selectedChat);
+  const { chats, loadChats, loadMore, hasMore, isLoadingMore, total } = useChats();
+  const {
+    listItems,
+    isLoadingOlder,
+    hasMoreOlder,
+    isLoadingNewer,
+    hasMoreNewer,
+    scrollTarget,
+    onScrolled,
+    loadOlderMessages,
+    loadNewerMessages,
+  } = useMessages(selectedChat);
 
   const handleChatSelect = useCallback(
     (chat: Chat, pushUrl = true) => {
@@ -82,9 +92,19 @@ function HomeContent() {
     router.push('/', { scroll: false });
   }, [router]);
 
-  const handleRefresh = useCallback(async () => {
-    await loadChats();
-  }, [loadChats]);
+  const handleRefresh = useCallback(
+    async (filters?: ChatFilters) => {
+      await loadChats(filters);
+    },
+    [loadChats],
+  );
+
+  const handleFilterChange = useCallback(
+    (filters: ChatFilters) => {
+      void loadChats(filters);
+    },
+    [loadChats],
+  );
 
   // ── Loading screen ─────────────────────────────────────────────────────────
   if (authLoading) {
@@ -108,6 +128,11 @@ function HomeContent() {
         setSidebarWidth={setSidebarWidth}
         onRefresh={handleRefresh}
         onShowMenu={() => setShowMenu(true)}
+        hasMore={hasMore}
+        isLoadingMore={isLoadingMore}
+        onLoadMore={loadMore}
+        onFilterChange={handleFilterChange}
+        total={total}
       />
 
       {selectedChat ? (
@@ -121,9 +146,12 @@ function HomeContent() {
               messagesContainerRef={messagesContainerRef}
               isLoadingOlder={isLoadingOlder}
               hasMoreOlder={hasMoreOlder}
+              isLoadingNewer={isLoadingNewer}
+              hasMoreNewer={hasMoreNewer}
               scrollTarget={scrollTarget}
               onScrolled={onScrolled}
               loadOlderMessages={loadOlderMessages}
+              loadNewerMessages={loadNewerMessages}
             />
             <MessageInput />
           </div>

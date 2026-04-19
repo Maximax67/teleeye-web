@@ -224,17 +224,36 @@ class APIClient {
 
   // ── Chats ──────────────────────────────────────────────────────────────────
 
-  async getChats(page = 1, size = 50): Promise<ChatsResponse> {
-    return this.request(`/telegram/chats?page=${page}&size=${size}`);
+  async getChats(
+    page = 1,
+    size = 50,
+    chatTypes?: string[],
+    botIds?: number[],
+    search?: string,
+  ): Promise<ChatsResponse> {
+    const params = new URLSearchParams({ page: String(page), size: String(size) });
+    if (chatTypes && chatTypes.length > 0) params.set('chat_types', chatTypes.join(','));
+    if (botIds && botIds.length > 0) params.set('bots', botIds.join(','));
+    if (search && search.trim()) params.set('search', search.trim());
+    return this.request(`/telegram/chats?${params.toString()}`);
   }
 
+  /**
+   * Fetch messages for a chat.
+   *
+   * @param beforeId  Load messages with id < beforeId (older messages, DESC).
+   * @param afterId   Load messages with id > afterId  (newer messages, ASC).
+   *                  Mutually exclusive with beforeId.
+   */
   async getChatMessages(
     chatId: number,
     limit = 50,
     beforeId?: number,
+    afterId?: number,
   ): Promise<MessagesResponse> {
     const params = new URLSearchParams({ limit: String(limit) });
     if (beforeId !== undefined) params.set('before_id', String(beforeId));
+    if (afterId !== undefined) params.set('after_id', String(afterId));
     return this.request(`/telegram/chats/${chatId}/messages?${params.toString()}`);
   }
 
