@@ -29,7 +29,9 @@ function HomeContent() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   const isMobile = useIsMobile();
-  const { chats, loadChats, loadMore, hasMore, isLoadingMore, total } = useChats();
+  const { chats, loadChats, loadMore, hasMore, isLoadingMore, total, updateChatReadStatus } =
+    useChats();
+
   const {
     listItems,
     isLoadingOlder,
@@ -40,7 +42,7 @@ function HomeContent() {
     onScrolled,
     loadOlderMessages,
     loadNewerMessages,
-  } = useMessages(selectedChat);
+  } = useMessages(selectedChat, updateChatReadStatus);
 
   const handleChatSelect = useCallback(
     (chat: Chat, pushUrl = true) => {

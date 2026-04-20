@@ -9,6 +9,7 @@ import { ContextMenu } from './ContextMenu';
 import { getForwardLabel, isServiceMessage } from './messageHelpers';
 import { StickerMessage } from './media/StickerMessage';
 import { FullInfoModal } from './FullInfoModal';
+import { MessageSenderAvatar } from './MessageSenderAvatar';
 
 interface MessageProps {
   message: MessageType;
@@ -20,7 +21,6 @@ export function Message({ message }: MessageProps) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [showInfo, setShowInfo] = useState(false);
 
-  // Close context menu on outside click
   useEffect(() => {
     if (!contextMenu) return;
     const handle = () => setContextMenu(null);
@@ -28,7 +28,6 @@ export function Message({ message }: MessageProps) {
     return () => document.removeEventListener('click', handle);
   }, [contextMenu]);
 
-  // ── Service messages ───────────────────────────────────────────────────────
   if (isServiceMessage(message)) {
     return <ServiceMessage message={message} />;
   }
@@ -83,8 +82,6 @@ export function Message({ message }: MessageProps) {
     : 'bg-white text-gray-900 dark:bg-gray-800 dark:text-white rounded-2xl rounded-bl-sm border border-gray-100 dark:border-gray-700';
 
   const maxWidthCls = isMedia ? 'max-w-[280px] sm:max-w-[320px]' : 'max-w-[72%] sm:max-w-[60%]';
-
-  // ── Shared inner content ───────────────────────────────────────────────────
   const inner = (
     <>
       {forwardLabel && <ForwardHeader forwardLabel={forwardLabel} isOutgoing={isOutgoing} />}
@@ -103,15 +100,10 @@ export function Message({ message }: MessageProps) {
         className={`mb-1 flex ${isOutgoing ? 'justify-end' : 'justify-start'} items-end gap-2`}
         onContextMenu={handleContextMenu}
       >
-        {/* Sender mini-avatar for group messages */}
+        {/* Sender avatar for incoming group messages */}
         {!isOutgoing && message.from && (
-          <div
-            className="mb-0.5 h-6 w-6 shrink-0 overflow-hidden rounded-full"
-            title={`${message.from.first_name} ${message.from.last_name ?? ''}`}
-          >
-            <div className="flex h-full w-full items-center justify-center bg-linear-to-br from-blue-400 to-purple-500 text-[10px] font-bold text-white">
-              {message.from.first_name[0]}
-            </div>
+          <div className="mb-0.5">
+            <MessageSenderAvatar user={message.from} size={26} />
           </div>
         )}
 

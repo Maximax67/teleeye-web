@@ -25,7 +25,10 @@ export interface UseMessagesReturn {
   loadNewerMessages: (afterId: number) => Promise<void>;
 }
 
-export function useMessages(chat: Chat | null): UseMessagesReturn {
+export function useMessages(
+  chat: Chat | null,
+  onMarkRead?: (chatId: number, messageId: number) => void,
+): UseMessagesReturn {
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMoreOlder, setHasMoreOlder] = useState(false);
   const [hasMoreNewer, setHasMoreNewer] = useState(false);
@@ -40,12 +43,24 @@ export function useMessages(chat: Chat | null): UseMessagesReturn {
   const loadingNewerRef = useRef(false);
   const hasMoreOlderRef = useRef(false);
   const hasMoreNewerRef = useRef(false);
+  const onMarkReadRef = useRef(onMarkRead);
+
+  useEffect(() => {
+    onMarkReadRef.current = onMarkRead;
+  }, [onMarkRead]);
 
   // ── Derive listItems via memo ─────────────────────────────────────────────
 
   const listItems = useMemo<MessageListItem[]>(() => {
     return buildMessageListItems(messages, firstUnreadId);
   }, [messages, firstUnreadId]);
+
+  // ── Mark read helper ──────────────────────────────────────────────────────
+
+  const markRead = useCallback((chatId: number, messageId: number) => {
+    void apiClient.markChatRead(chatId, messageId);
+    onMarkReadRef.current?.(chatId, messageId);
+  }, []);
 
   // ── Initial load ──────────────────────────────────────────────────────────
 
@@ -98,7 +113,7 @@ export function useMessages(chat: Chat | null): UseMessagesReturn {
           const latestItem = data.items.reduce((a, b) =>
             a.message_id > b.message_id ? a : b,
           );
-          void apiClient.markChatRead(chatObj.id, latestItem.message_id);
+          markRead(chatObj.id, latestItem.message_id);
         }
 
         hasMoreOlderRef.current = data.has_more_older;
@@ -112,7 +127,7 @@ export function useMessages(chat: Chat | null): UseMessagesReturn {
       loadingOlderRef.current = false;
       setIsLoadingOlder(false);
     }
-  }, []);
+  }, [markRead]);
 
   // ── Load older messages (scroll up) ──────────────────────────────────────
 
@@ -162,7 +177,7 @@ export function useMessages(chat: Chat | null): UseMessagesReturn {
           const latestItem = data.items.reduce((a, b) =>
             a.message_id > b.message_id ? a : b,
           );
-          void apiClient.markChatRead(chatId, latestItem.message_id);
+          markRead(chatId, latestItem.message_id);
         }
       }
 
@@ -172,7 +187,7 @@ export function useMessages(chat: Chat | null): UseMessagesReturn {
       loadingNewerRef.current = false;
       setIsLoadingNewer(false);
     }
-  }, []);
+  }, [markRead]);
 
   // ── React to chat change ──────────────────────────────────────────────────
 

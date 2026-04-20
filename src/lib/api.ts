@@ -66,14 +66,13 @@ class APIClient {
     storage.setApiUrl(trimmed);
   }
 
-  /**
-   * Tests a URL by sending a GET request and checking for HTTP 200.
-   * Returns true if the server responds with 200, false otherwise.
-   */
   async testApiUrl(url: string): Promise<boolean> {
     try {
       const trimmed = url.trim().replace(/\/$/, '');
-      const response = await fetch(`${trimmed}/health`, { method: 'GET', signal: AbortSignal.timeout(5000) });
+      const response = await fetch(`${trimmed}/health`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000),
+      });
       return response.status === 200;
     } catch {
       return false;
@@ -269,13 +268,6 @@ class APIClient {
     return this.request(`/telegram/chats?${params.toString()}`);
   }
 
-  /**
-   * Fetch messages for a chat.
-   *
-   * @param beforeId  Load messages with id < beforeId (older messages, DESC).
-   * @param afterId   Load messages with id > afterId  (newer messages, ASC).
-   *                  Mutually exclusive with beforeId.
-   */
   async getChatMessages(
     chatId: number,
     limit = 50,
@@ -305,6 +297,18 @@ class APIClient {
       return response.blob();
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  // ── User avatars ───────────────────────────────────────────────────────────
+
+  async getUserAvatar(userId: number): Promise<Blob | null> {
+    try {
+      const response = await this.request<Response>(`/telegram/users/${userId}/avatar`);
+      return response.blob();
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 502)) return null;
       throw e;
     }
   }
