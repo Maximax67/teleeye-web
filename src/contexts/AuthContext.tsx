@@ -18,6 +18,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Wire up the client's session-expiry hook so that when a refresh token is
+  // rejected (401), the client can clear React state without importing this
+  // context (which would create a circular dependency).
+  useEffect(() => {
+    apiClient.setOnSessionExpired(() => {
+      setUser(null);
+      // Tokens and IndexedDB cache are already cleared inside the client.
+    });
+  }, []);
+
   useEffect(() => {
     const initAuth = async () => {
       const tokens = apiClient.getTokens();
