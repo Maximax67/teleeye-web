@@ -19,7 +19,7 @@ export interface UseChatsReturn {
   total: number;
   loadChats: (filters?: ChatFilters) => Promise<void>;
   loadMore: () => Promise<void>;
-  updateChatReadStatus: (chatId: number, messageId: number) => void;
+  updateChatReadStatus: (chatId: number, messageId: number, threadId?: number) => void;
 }
 
 const PAGE_SIZE = 50;
@@ -66,7 +66,6 @@ export function useChats(): UseChatsReturn {
         setChats(prev => [...prev, ...data.items]);
       } else {
         setChats(data.items);
-        // Only cache the unfiltered first page
         if (page === 1 && !filters.chatTypes?.length && !filters.botIds?.length && !filters.search) {
           dbCache.setChats(data.items);
         }
@@ -94,14 +93,31 @@ export function useChats(): UseChatsReturn {
     await fetchPage(pageRef.current + 1, filtersRef.current, true);
   }, [hasMore, isLoadingMore, fetchPage]);
 
-  const updateChatReadStatus = useCallback((chatId: number, messageId: number) => {
+  // Update read status for a specific thread (or thread 1 by default)
+  const updateChatReadStatus = useCallback((chatId: number, messageId: number, threadId = 1) => {
     setChats(prev =>
       prev.map(c => {
         if (c.id !== chatId) return c;
-        return {
-          ...c,
-          read_messages: [{ message_thread_id: 1, message_id: messageId }],
-        };
+
+        const existingIdx = c.read_messages.findIndex(
+          r => r.message_thread_id === threadId,
+        );
+
+        let newReadMessages;
+        if (existingIdx >= 0) {
+          // Only update if the new messageId is higher
+          if (c.read_messages[existingIdx].message_id >= messageId) return c;
+          newReadMessages = c.read_messages.map((r, i) =>
+            i === existingIdx ? { ...r, message_id: messageId } : r,
+          );
+        } else {
+          newReadMessages = [
+            ...c.read_messages,
+            { message_thread_id: threadId, message_id: messageId },
+          ];
+        }
+
+        return { ...c, read_messages: newReadMessages };
       }),
     );
   }, []);

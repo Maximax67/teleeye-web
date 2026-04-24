@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronLeft, Hash, User, Users } from 'lucide-react';
+import { ChevronLeft, Hash, User, Users, MessageSquare } from 'lucide-react';
 import { Chat } from '@/types';
 import { getChatTitle } from '@/lib/utils';
 import { ChatAvatar } from './ChatAvatar';
@@ -8,9 +8,11 @@ import { ChatAvatar } from './ChatAvatar';
 interface ChatHeaderProps {
   selectedChat: Chat;
   onBack: () => void;
+  onShowThreads?: () => void;
+  hasThreads?: boolean;
 }
 
-export const ChatHeader = ({ selectedChat, onBack }: ChatHeaderProps) => {
+export const ChatHeader = ({ selectedChat, onBack, onShowThreads, hasThreads }: ChatHeaderProps) => {
   const chatTitle = getChatTitle(selectedChat);
 
   const getChatTypeLabel = () => {
@@ -68,6 +70,18 @@ export const ChatHeader = ({ selectedChat, onBack }: ChatHeaderProps) => {
           )}
         </div>
       </div>
+
+      {onShowThreads && (
+        <button
+          onClick={onShowThreads}
+          className={`rounded-lg p-1.5 transition-colors hover:bg-gray-100 dark:hover:bg-gray-800 ${
+            hasThreads ? 'text-blue-500' : 'text-gray-600 dark:text-gray-400'
+          }`}
+          title="Topics"
+        >
+          <MessageSquare size={18} />
+        </button>
+      )}
     </div>
   );
 };

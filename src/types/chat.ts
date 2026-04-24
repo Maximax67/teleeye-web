@@ -20,6 +20,17 @@ export interface Chat {
   read_messages: ReadMessage[];
 }
 
+export interface ChatThread {
+  thread_id: number;
+  last_message: Message;
+  unread_count: number;
+  message_count: number;
+}
+
+export interface ChatThreadsResponse {
+  items: ChatThread[];
+}
+
 export interface ChatsResponse {
   items: Chat[];
   total: number;
@@ -32,6 +43,12 @@ export function getLastReadMessageId(chat: Chat): number | null {
   if (!chat.read_messages || chat.read_messages.length === 0) return 0;
   const max = Math.max(...chat.read_messages.map((r) => r.message_id));
   return max > 0 ? max : null;
+}
+
+export function getThreadReadMessageId(chat: Chat, threadId: number): number {
+  if (!chat.read_messages || chat.read_messages.length === 0) return 0;
+  const entry = chat.read_messages.find((r) => r.message_thread_id === threadId);
+  return entry?.message_id ?? 0;
 }
 
 export function getUnreadCount(chat: Chat): number {

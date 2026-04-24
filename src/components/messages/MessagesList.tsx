@@ -18,6 +18,7 @@ interface MessagesListProps {
   onScrolled: () => void;
   loadOlderMessages: (beforeId: number) => Promise<void>;
   loadNewerMessages: (afterId: number) => Promise<void>;
+  onMessageVisible?: (messageId: number) => void;
 }
 
 export const MessagesList = ({
@@ -32,8 +33,11 @@ export const MessagesList = ({
   onScrolled,
   loadOlderMessages,
   loadNewerMessages,
+  onMessageVisible,
 }: MessagesListProps) => {
   const unreadSeparatorRef = useRef<HTMLDivElement>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const observedElementsRef = useRef<Map<number, HTMLElement>>(new Map());
 
   // Track scroll state for restoration when prepending older messages
   const scrollRestoreRef = useRef({ savedHeight: 0, savedTop: 0, active: false });
@@ -71,6 +75,55 @@ export const MessagesList = ({
     return () => cancelAnimationFrame(rafId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollTarget, listItems.length > 0]);
+
+  // ── Intersection Observer for tracking visible messages ───────────────────
+  useEffect(() => {
+    if (!onMessageVisible) return;
+
+    // Clean up previous observer
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+    }
+
+    // Create new observer
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const messageId = Number((entry.target as HTMLElement).dataset.messageId);
+            if (!isNaN(messageId)) {
+              onMessageVisible(messageId);
+            }
+          }
+        });
+      },
+      {
+        root: messagesContainerRef.current,
+        rootMargin: '0px',
+        threshold: 0.1, // Trigger when 10% of the message is visible
+      },
+    );
+
+    observerRef.current = observer;
+
+    // Observe all message elements
+    const messageElements = messagesContainerRef.current?.querySelectorAll('[data-message-id]');
+    messageElements?.forEach((el) => {
+      const messageId = Number((el as HTMLElement).dataset.messageId);
+      if (!isNaN(messageId)) {
+        observer.observe(el);
+        observedElementsRef.current.set(messageId, el as HTMLElement);
+      }
+    });
+
+    const elements = observedElementsRef.current;
+
+    return () => {
+      observer.disconnect();
+      elements.clear();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listItems, onMessageVisible]);
 
   // ── Infinite scroll — up (older) and down (newer) ─────────────────────────
   const handleScroll = useCallback(() => {

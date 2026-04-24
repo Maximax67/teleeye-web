@@ -2,13 +2,13 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { Chat, Message, MessageListItem } from '@/types';
-import { buildMessageListItems, getLastReadMessageId } from '@/types';
+import { buildMessageListItems, getLastReadMessageId, getThreadReadMessageId } from '@/types';
 import { apiClient } from '@/lib/api';
 import { dbCache } from '@/lib/indexeddb';
 
-/** How many messages before the first unread to load as context */
 const BATCH_SIZE = 50;
 const UNREAD_CONTEXT = 15;
+const MARK_READ_DEBOUNCE_MS = 4000;
 
 export type ScrollTarget = 'bottom' | 'unread' | 'none';
 
@@ -23,11 +23,13 @@ export interface UseMessagesReturn {
   onScrolled: () => void;
   loadOlderMessages: (beforeId: number) => Promise<void>;
   loadNewerMessages: (afterId: number) => Promise<void>;
+  onMessageVisible: (messageId: number) => void;
 }
 
 export function useMessages(
   chat: Chat | null,
-  onMarkRead?: (chatId: number, messageId: number) => void,
+  threadId: number | null,
+  onMarkRead?: (chatId: number, messageId: number, threadId?: number) => void,
 ): UseMessagesReturn {
   const [messages, setMessages] = useState<Message[]>([]);
   const [hasMoreOlder, setHasMoreOlder] = useState(false);
@@ -37,61 +39,105 @@ export function useMessages(
   const [firstUnreadId, setFirstUnreadId] = useState<number | null>(null);
   const [scrollTarget, setScrollTarget] = useState<ScrollTarget>('none');
 
-  // Refs to avoid stale-closure problems inside callbacks
   const chatIdRef = useRef<number | null>(null);
+  const threadIdRef = useRef<number | null>(null);
   const loadingOlderRef = useRef(false);
   const loadingNewerRef = useRef(false);
   const hasMoreOlderRef = useRef(false);
   const hasMoreNewerRef = useRef(false);
   const onMarkReadRef = useRef(onMarkRead);
 
+  // For scroll-based read tracking
+  const lastMarkedIdRef = useRef<number>(0);
+  const pendingReadIdRef = useRef<number | null>(null);
+  const readTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     onMarkReadRef.current = onMarkRead;
   }, [onMarkRead]);
-
-  // ── Derive listItems via memo ─────────────────────────────────────────────
 
   const listItems = useMemo<MessageListItem[]>(() => {
     return buildMessageListItems(messages, firstUnreadId);
   }, [messages, firstUnreadId]);
 
-  // ── Mark read helper ──────────────────────────────────────────────────────
+  // ── Fire the actual API call (debounced) ──────────────────────────────────
+  const flushPendingRead = useCallback(() => {
+    const chatId = chatIdRef.current;
+    const tid = threadIdRef.current;
+    const msgId = pendingReadIdRef.current;
+    if (!chatId || msgId === null) return;
+    pendingReadIdRef.current = null;
+    void apiClient.markChatRead(chatId, msgId, tid ?? undefined);
+  }, []);
 
+  // ── Called by MessagesList whenever a message scrolls into view ───────────
+  const onMessageVisible = useCallback((messageId: number) => {
+    const chatId = chatIdRef.current;
+    if (!chatId) return;
+    if (messageId <= lastMarkedIdRef.current) return;
+
+    lastMarkedIdRef.current = messageId;
+    pendingReadIdRef.current = messageId;
+
+    // Update sidebar counter immediately
+    onMarkReadRef.current?.(chatId, messageId, threadIdRef.current ?? 1);
+
+    // Debounce the API call
+    if (readTimerRef.current) clearTimeout(readTimerRef.current);
+    readTimerRef.current = setTimeout(flushPendingRead, MARK_READ_DEBOUNCE_MS);
+  }, [flushPendingRead]);
+
+  // ── Cleanup timer ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (readTimerRef.current) clearTimeout(readTimerRef.current);
+    };
+  }, []);
+
+  // ── Hard mark-read helper (e.g. when reaching bottom) ────────────────────
   const markRead = useCallback((chatId: number, messageId: number) => {
-    void apiClient.markChatRead(chatId, messageId);
-    onMarkReadRef.current?.(chatId, messageId);
+    if (readTimerRef.current) clearTimeout(readTimerRef.current);
+    pendingReadIdRef.current = null;
+    lastMarkedIdRef.current = messageId;
+    void apiClient.markChatRead(chatId, messageId, threadIdRef.current ?? undefined);
+    onMarkReadRef.current?.(chatId, messageId, threadIdRef.current ?? 1);
   }, []);
 
   // ── Initial load ──────────────────────────────────────────────────────────
-
-  const loadInitial = useCallback(async (chatObj: Chat) => {
+  const loadInitial = useCallback(async (chatObj: Chat, tid: number | null) => {
     if (loadingOlderRef.current) return;
     loadingOlderRef.current = true;
     setIsLoadingOlder(true);
 
     try {
-      // Serve cached messages immediately for perceived speed
       const cached = await dbCache.getMessages(chatObj.id);
       if (cached.length > 0) {
-        setMessages(cached.sort((a, b) => a.message_id - b.message_id));
+        const filtered = tid
+          ? cached.filter(m => (m.message_thread_id ?? 1) === tid)
+          : cached;
+        setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
       }
 
-      const lastReadId = getLastReadMessageId(chatObj);
+      const lastReadId = tid
+        ? getThreadReadMessageId(chatObj, tid)
+        : (getLastReadMessageId(chatObj) ?? 0);
       const latestId = chatObj.last_message?.message_id;
       const hasUnread =
-        lastReadId !== null && latestId !== undefined && lastReadId < latestId;
+        latestId !== undefined && lastReadId < latestId;
 
       if (hasUnread) {
-        // ── Load around the unread boundary ─────────────────────────────────
-        // after_id: start just before the unread separator for context
         const afterId = Math.max(0, lastReadId - UNREAD_CONTEXT);
-        const data = await apiClient.getChatMessages(chatObj.id, BATCH_SIZE, undefined, afterId);
+        const data = await apiClient.getChatMessages(
+          chatObj.id, BATCH_SIZE, undefined, afterId, tid ?? undefined,
+        );
 
         if (data.items.length > 0) {
           await dbCache.setMessages(chatObj.id, data.items);
-          // Re-read from cache to merge with any previously cached messages
           const all = await dbCache.getMessages(chatObj.id);
-          setMessages(all.sort((a, b) => a.message_id - b.message_id));
+          const filtered = tid
+            ? all.filter(m => (m.message_thread_id ?? 1) === tid)
+            : all;
+          setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
         }
 
         hasMoreOlderRef.current = data.has_more_older;
@@ -101,19 +147,23 @@ export function useMessages(
         setFirstUnreadId(lastReadId + 1);
         setScrollTarget('unread');
       } else {
-        // ── Load the latest messages ─────────────────────────────────────────
-        const data = await apiClient.getChatMessages(chatObj.id, BATCH_SIZE);
+        const data = await apiClient.getChatMessages(
+          chatObj.id, BATCH_SIZE, undefined, undefined, tid ?? undefined,
+        );
 
         if (data.items.length > 0) {
           await dbCache.setMessages(chatObj.id, data.items);
           const all = await dbCache.getMessages(chatObj.id);
-          setMessages(all.sort((a, b) => a.message_id - b.message_id));
+          const filtered = tid
+            ? all.filter(m => (m.message_thread_id ?? 1) === tid)
+            : all;
+          setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
 
-          // Mark as read: we're at the end of history
           const latestItem = data.items.reduce((a, b) =>
             a.message_id > b.message_id ? a : b,
           );
           markRead(chatObj.id, latestItem.message_id);
+          lastMarkedIdRef.current = latestItem.message_id;
         }
 
         hasMoreOlderRef.current = data.has_more_older;
@@ -129,22 +179,27 @@ export function useMessages(
     }
   }, [markRead]);
 
-  // ── Load older messages (scroll up) ──────────────────────────────────────
-
+  // ── Load older messages ───────────────────────────────────────────────────
   const loadOlderMessages = useCallback(async (beforeId: number) => {
     const chatId = chatIdRef.current;
+    const tid = threadIdRef.current;
     if (!chatId || loadingOlderRef.current || !hasMoreOlderRef.current) return;
 
     loadingOlderRef.current = true;
     setIsLoadingOlder(true);
 
     try {
-      const data = await apiClient.getChatMessages(chatId, BATCH_SIZE, beforeId);
+      const data = await apiClient.getChatMessages(
+        chatId, BATCH_SIZE, beforeId, undefined, tid ?? undefined,
+      );
 
       if (data.items.length > 0) {
         await dbCache.setMessages(chatId, data.items);
         const all = await dbCache.getMessages(chatId);
-        setMessages(all.sort((a, b) => a.message_id - b.message_id));
+        const filtered = tid
+          ? all.filter(m => (m.message_thread_id ?? 1) === tid)
+          : all;
+        setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
       }
 
       hasMoreOlderRef.current = data.has_more_older;
@@ -155,29 +210,34 @@ export function useMessages(
     }
   }, []);
 
-  // ── Load newer messages (scroll down) ────────────────────────────────────
-
+  // ── Load newer messages ───────────────────────────────────────────────────
   const loadNewerMessages = useCallback(async (afterId: number) => {
     const chatId = chatIdRef.current;
+    const tid = threadIdRef.current;
     if (!chatId || loadingNewerRef.current || !hasMoreNewerRef.current) return;
 
     loadingNewerRef.current = true;
     setIsLoadingNewer(true);
 
     try {
-      const data = await apiClient.getChatMessages(chatId, BATCH_SIZE, undefined, afterId);
+      const data = await apiClient.getChatMessages(
+        chatId, BATCH_SIZE, undefined, afterId, tid ?? undefined,
+      );
 
       if (data.items.length > 0) {
         await dbCache.setMessages(chatId, data.items);
         const all = await dbCache.getMessages(chatId);
-        setMessages(all.sort((a, b) => a.message_id - b.message_id));
+        const filtered = tid
+          ? all.filter(m => (m.message_thread_id ?? 1) === tid)
+          : all;
+        setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
 
-        // When we reach the end of new messages, mark as read
         if (!data.has_more_newer) {
           const latestItem = data.items.reduce((a, b) =>
             a.message_id > b.message_id ? a : b,
           );
           markRead(chatId, latestItem.message_id);
+          lastMarkedIdRef.current = latestItem.message_id;
         }
       }
 
@@ -189,9 +249,14 @@ export function useMessages(
     }
   }, [markRead]);
 
-  // ── React to chat change ──────────────────────────────────────────────────
-
+  // ── React to chat OR thread change ────────────────────────────────────────
   useEffect(() => {
+    // Flush any pending read before switching
+    if (readTimerRef.current) {
+      clearTimeout(readTimerRef.current);
+      flushPendingRead();
+    }
+
     if (!chat) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setMessages([]);
@@ -200,17 +265,25 @@ export function useMessages(
       setHasMoreNewer(false);
       setScrollTarget('none');
       chatIdRef.current = null;
+      threadIdRef.current = null;
       hasMoreOlderRef.current = false;
       hasMoreNewerRef.current = false;
+      lastMarkedIdRef.current = 0;
       return;
     }
 
-    // Trim previous chat cache before switching
-    if (chatIdRef.current !== null && chatIdRef.current !== chat.id) {
-      void dbCache.trimMessages(chatIdRef.current);
+    const prevChatId = chatIdRef.current;
+
+    if (prevChatId !== null && prevChatId !== chat.id) {
+      void dbCache.trimMessages(prevChatId);
     }
 
     chatIdRef.current = chat.id;
+    threadIdRef.current = threadId;
+    lastMarkedIdRef.current = threadId
+      ? getThreadReadMessageId(chat, threadId)
+      : (getLastReadMessageId(chat) ?? 0);
+
     setMessages([]);
     setFirstUnreadId(null);
     setScrollTarget('none');
@@ -221,9 +294,9 @@ export function useMessages(
     loadingOlderRef.current = false;
     loadingNewerRef.current = false;
 
-    void loadInitial(chat);
+    void loadInitial(chat, threadId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat?.id]);
+  }, [chat?.id, threadId]);
 
   const onScrolled = useCallback(() => {
     setScrollTarget('none');
@@ -240,5 +313,6 @@ export function useMessages(
     onScrolled,
     loadOlderMessages,
     loadNewerMessages,
+    onMessageVisible,
   };
 }

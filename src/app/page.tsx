@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { dbCache } from '@/lib/indexeddb';
+import { apiClient } from '@/lib/api';
 import type { Chat } from '@/types';
 import type { ChatFilters } from '@/hooks';
 
@@ -12,6 +13,7 @@ import { ChatHeader } from '@/components/chats/ChatHeader';
 import { MessagesList } from '@/components/messages/MessagesList';
 import { MessageInput } from '@/components/messages/MessageInput';
 import { SettingsMenu } from '@/components/settings/SettingsMenu';
+import { ThreadsPanel } from '@/components/messages/ThreadsPanel';
 import { useChats, useMessages, useIsMobile } from '@/hooks';
 
 function HomeContent() {
@@ -24,6 +26,8 @@ function HomeContent() {
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  const [selectedThreadId, setSelectedThreadId] = useState<number | null>(null);
+  const [showThreadsPanel, setShowThreadsPanel] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -42,7 +46,8 @@ function HomeContent() {
     onScrolled,
     loadOlderMessages,
     loadNewerMessages,
-  } = useMessages(selectedChat, updateChatReadStatus);
+    onMessageVisible,
+  } = useMessages(selectedChat, selectedThreadId, updateChatReadStatus);
 
   const handleChatSelect = useCallback(
     (chat: Chat, pushUrl = true) => {
@@ -77,14 +82,27 @@ function HomeContent() {
   }, [user]);
 
   useEffect(() => {
-    if (!initialized || chats.length === 0) return;
+    if (!initialized) return;
     const chatIdParam = searchParams.get('chatId');
     if (!chatIdParam) return;
     const chatId = parseInt(chatIdParam, 10);
     if (isNaN(chatId) || selectedChat?.id === chatId) return;
+
     const chat = chats.find((c) => c.id === chatId);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (chat) handleChatSelect(chat, false);
+    if (chat) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      handleChatSelect(chat, false);
+    } else {
+      // Chat not in current list, try to fetch it directly
+      apiClient.getChat(chatId).then((fetchedChat) => {
+        if (fetchedChat) {
+          setSelectedChat(fetchedChat);
+          setShowMobileChat(true);
+        }
+      }).catch(() => {
+        // Chat not found or not accessible, ignore
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialized, chats, searchParams]);
 
@@ -139,7 +157,12 @@ function HomeContent() {
 
       {selectedChat ? (
         <div className="flex flex-1 flex-col overflow-hidden bg-[#eae6df] dark:bg-gray-900">
-          <ChatHeader selectedChat={selectedChat} onBack={handleBackToChats} />
+          <ChatHeader
+            selectedChat={selectedChat}
+            onBack={handleBackToChats}
+            onShowThreads={() => setShowThreadsPanel(!showThreadsPanel)}
+            hasThreads={showThreadsPanel}
+          />
 
           <div className="relative flex flex-1 flex-col overflow-hidden">
             <MessagesList
@@ -154,9 +177,19 @@ function HomeContent() {
               onScrolled={onScrolled}
               loadOlderMessages={loadOlderMessages}
               loadNewerMessages={loadNewerMessages}
+              onMessageVisible={onMessageVisible}
             />
             <MessageInput />
           </div>
+
+          {showThreadsPanel && (
+            <ThreadsPanel
+              chatId={selectedChat.id}
+              selectedThreadId={selectedThreadId}
+              onThreadSelect={setSelectedThreadId}
+              onClose={() => setShowThreadsPanel(false)}
+            />
+          )}
         </div>
       ) : (
         <div className="hidden flex-1 items-center justify-center bg-[#eae6df] md:flex dark:bg-gray-900">

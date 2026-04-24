@@ -57,6 +57,7 @@ export function Message({ message }: MessageProps) {
         <div
           className={`mb-1 flex ${isOutgoing ? 'justify-end' : 'justify-start'}`}
           onContextMenu={handleContextMenu}
+          data-message-id={message.message_id}
         >
           <StickerMessage sticker={message.sticker} />
         </div>
@@ -99,6 +100,7 @@ export function Message({ message }: MessageProps) {
       <div
         className={`mb-1 flex ${isOutgoing ? 'justify-end' : 'justify-start'} items-end gap-2`}
         onContextMenu={handleContextMenu}
+        data-message-id={message.message_id}
       >
         {/* Sender avatar for incoming group messages */}
         {!isOutgoing && message.from && (

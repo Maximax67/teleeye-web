@@ -12,7 +12,7 @@ class AvatarScheduler {
   private inFlight = new Set<number>();
   private urlCache = new Map<number, string | null>();
   private maxConcurrent = 2;
-  private requestDelay = 150; // ms between requests
+  private requestDelay = 500;
   private lastRequestTime = 0;
 
   async getAvatar(chatId: number, priority = 0): Promise<string | null> {

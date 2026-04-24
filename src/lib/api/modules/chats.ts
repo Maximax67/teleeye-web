@@ -1,6 +1,6 @@
 import { SessionsApi } from './sessions';
 import { ApiError } from '../error';
-import type { ChatsResponse } from '@/types';
+import type { Chat, ChatsResponse, ChatThreadsResponse } from '@/types';
 
 export class ChatsApi extends SessionsApi {
   async getChats(
@@ -17,11 +17,23 @@ export class ChatsApi extends SessionsApi {
     return this.request(`/telegram/chats?${params.toString()}`);
   }
 
-  async markChatRead(chatId: number, messageId?: number): Promise<void> {
+  async getChat(chatId: number): Promise<Chat | null> {
+    try {
+      return await this.request<Chat>(`/telegram/chats/${chatId}`);
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 403)) return null;
+      throw e;
+    }
+  }
+
+  async markChatRead(chatId: number, messageId?: number, threadId?: number): Promise<void> {
     try {
       await this.request(`/telegram/chats/${chatId}/messages/read`, {
         method: 'PUT',
-        body: JSON.stringify({ message_id: messageId ?? null }),
+        body: JSON.stringify({
+          message_id: messageId ?? null,
+          message_thread_id: threadId ?? null,
+        }),
       });
     } catch (e) {
       console.error(e);
@@ -37,5 +49,11 @@ export class ChatsApi extends SessionsApi {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
     }
+  }
+
+  async getChatThreads(chatId: number, botIds?: number[]): Promise<ChatThreadsResponse> {
+    const params = new URLSearchParams();
+    if (botIds?.length) params.set('bots', botIds.join(','));
+    return this.request(`/telegram/chats/${chatId}/threads?${params.toString()}`);
   }
 }

@@ -11,7 +11,7 @@ class FileLoader {
   private inFlight = new Set<string>();
   private urlCache = new Map<string, string | null>();
   private maxConcurrent = 2;
-  private requestDelay = 300;
+  private requestDelay = 1000;
 
   async loadFile(fileUniqueId: string, priority = 0): Promise<string | null> {
     if (this.urlCache.has(fileUniqueId)) {

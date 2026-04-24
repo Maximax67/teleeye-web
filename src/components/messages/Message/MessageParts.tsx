@@ -31,7 +31,7 @@ interface ServiceMessageProps {
 
 export function ServiceMessage({ message }: ServiceMessageProps) {
   return (
-    <div className="my-1.5 flex justify-center">
+    <div className="my-1.5 flex justify-center" data-message-id={message.message_id}>
       <div className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-500 dark:bg-gray-800 dark:text-gray-400">
         {serviceText(message)}
       </div>
