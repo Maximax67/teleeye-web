@@ -94,7 +94,7 @@ export function useMessages(
     };
   }, []);
 
-  // ── Hard mark-read helper (e.g. when reaching bottom) ────────────────────
+  // ── Hard mark-read helper ─────────────────────────────────────────────────
   const markRead = useCallback((chatId: number, messageId: number) => {
     if (readTimerRef.current) clearTimeout(readTimerRef.current);
     pendingReadIdRef.current = null;
@@ -103,6 +103,29 @@ export function useMessages(
     onMarkReadRef.current?.(chatId, messageId, threadIdRef.current ?? 1);
   }, []);
 
+  // ── Merge helper: add new items to existing state, dedup, sort asc ────────
+  const mergeIntoState = useCallback(
+    (newItems: Message[]) => {
+      setMessages(prev => {
+        if (newItems.length === 0) return prev;
+        const existingIds = new Set(prev.map(m => m.message_id));
+        const toAdd = newItems.filter(m => !existingIds.has(m.message_id));
+        if (toAdd.length === 0) return prev;
+        return [...prev, ...toAdd].sort((a, b) => a.message_id - b.message_id);
+      });
+    },
+    [],
+  );
+
+  // ── Filter fetched messages by current thread ─────────────────────────────
+  const filterByThread = useCallback(
+    (items: Message[], tid: number | null): Message[] => {
+      if (tid === null) return items;
+      return items.filter(m => (m.message_thread_id ?? 1) === tid);
+    },
+    [],
+  );
+
   // ── Initial load ──────────────────────────────────────────────────────────
   const loadInitial = useCallback(async (chatObj: Chat, tid: number | null) => {
     if (loadingOlderRef.current) return;
@@ -110,20 +133,20 @@ export function useMessages(
     setIsLoadingOlder(true);
 
     try {
+      // Show cached messages briefly as optimistic render
       const cached = await dbCache.getMessages(chatObj.id);
       if (cached.length > 0) {
-        const filtered = tid
-          ? cached.filter(m => (m.message_thread_id ?? 1) === tid)
-          : cached;
-        setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
+        const filteredCached = filterByThread(cached, tid);
+        if (filteredCached.length > 0) {
+          setMessages(filteredCached.sort((a, b) => a.message_id - b.message_id));
+        }
       }
 
       const lastReadId = tid
         ? getThreadReadMessageId(chatObj, tid)
         : (getLastReadMessageId(chatObj) ?? 0);
       const latestId = chatObj.last_message?.message_id;
-      const hasUnread =
-        latestId !== undefined && lastReadId < latestId;
+      const hasUnread = latestId !== undefined && lastReadId < latestId;
 
       if (hasUnread) {
         const afterId = Math.max(0, lastReadId - UNREAD_CONTEXT);
@@ -131,13 +154,17 @@ export function useMessages(
           chatObj.id, BATCH_SIZE, undefined, afterId, tid ?? undefined,
         );
 
-        if (data.items.length > 0) {
-          await dbCache.setMessages(chatObj.id, data.items);
-          const all = await dbCache.getMessages(chatObj.id);
-          const filtered = tid
-            ? all.filter(m => (m.message_thread_id ?? 1) === tid)
-            : all;
-          setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
+        // Use fetched data directly — do NOT re-read from IndexedDB.
+        // Re-reading accumulates stale messages from previous sessions and
+        // creates phantom gaps in the message list.
+        const fetched = data.items;
+        const filtered = filterByThread(fetched, tid);
+        setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
+
+        // Overwrite cache with fresh data so the next session starts clean
+        await dbCache.clearMessages(chatObj.id);
+        if (fetched.length > 0) {
+          void dbCache.setMessages(chatObj.id, fetched);
         }
 
         hasMoreOlderRef.current = data.has_more_older;
@@ -151,15 +178,16 @@ export function useMessages(
           chatObj.id, BATCH_SIZE, undefined, undefined, tid ?? undefined,
         );
 
-        if (data.items.length > 0) {
-          await dbCache.setMessages(chatObj.id, data.items);
-          const all = await dbCache.getMessages(chatObj.id);
-          const filtered = tid
-            ? all.filter(m => (m.message_thread_id ?? 1) === tid)
-            : all;
-          setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
+        const fetched = data.items;
+        const filtered = filterByThread(fetched, tid);
+        setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
 
-          const latestItem = data.items.reduce((a, b) =>
+        // Overwrite cache
+        await dbCache.clearMessages(chatObj.id);
+        if (fetched.length > 0) {
+          void dbCache.setMessages(chatObj.id, fetched);
+
+          const latestItem = fetched.reduce((a, b) =>
             a.message_id > b.message_id ? a : b,
           );
           markRead(chatObj.id, latestItem.message_id);
@@ -177,7 +205,7 @@ export function useMessages(
       loadingOlderRef.current = false;
       setIsLoadingOlder(false);
     }
-  }, [markRead]);
+  }, [markRead, filterByThread]);
 
   // ── Load older messages ───────────────────────────────────────────────────
   const loadOlderMessages = useCallback(async (beforeId: number) => {
@@ -194,12 +222,11 @@ export function useMessages(
       );
 
       if (data.items.length > 0) {
-        await dbCache.setMessages(chatId, data.items);
-        const all = await dbCache.getMessages(chatId);
-        const filtered = tid
-          ? all.filter(m => (m.message_thread_id ?? 1) === tid)
-          : all;
-        setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
+        const newItems = filterByThread(data.items, tid);
+        // Merge into current React state — do NOT read from IndexedDB
+        mergeIntoState(newItems);
+        // Update cache separately (fire-and-forget)
+        void dbCache.setMessages(chatId, data.items);
       }
 
       hasMoreOlderRef.current = data.has_more_older;
@@ -208,7 +235,7 @@ export function useMessages(
       loadingOlderRef.current = false;
       setIsLoadingOlder(false);
     }
-  }, []);
+  }, [filterByThread, mergeIntoState]);
 
   // ── Load newer messages ───────────────────────────────────────────────────
   const loadNewerMessages = useCallback(async (afterId: number) => {
@@ -225,12 +252,11 @@ export function useMessages(
       );
 
       if (data.items.length > 0) {
-        await dbCache.setMessages(chatId, data.items);
-        const all = await dbCache.getMessages(chatId);
-        const filtered = tid
-          ? all.filter(m => (m.message_thread_id ?? 1) === tid)
-          : all;
-        setMessages(filtered.sort((a, b) => a.message_id - b.message_id));
+        const newItems = filterByThread(data.items, tid);
+        // Merge into current React state — do NOT read from IndexedDB
+        mergeIntoState(newItems);
+        // Update cache separately (fire-and-forget)
+        void dbCache.setMessages(chatId, data.items);
 
         if (!data.has_more_newer) {
           const latestItem = data.items.reduce((a, b) =>
@@ -247,7 +273,7 @@ export function useMessages(
       loadingNewerRef.current = false;
       setIsLoadingNewer(false);
     }
-  }, [markRead]);
+  }, [markRead, filterByThread, mergeIntoState]);
 
   // ── React to chat OR thread change ────────────────────────────────────────
   useEffect(() => {

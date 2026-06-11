@@ -111,6 +111,35 @@ class IndexedDBCache {
     });
   }
 
+  /**
+   * Delete ALL cached messages for a chat.
+   * Call this before storing a fresh API response so stale cached messages
+   * from previous sessions don't create phantom gaps in the message list.
+   */
+  async clearMessages(chatId: number): Promise<void> {
+    const db = this.db;
+    if (!db) return;
+
+    return new Promise((resolve) => {
+      const tx = db.transaction('messages', 'readwrite');
+      const store = tx.objectStore('messages');
+      const index = store.index('_chat_id');
+      const range = IDBKeyRange.only(chatId);
+      const cursorRequest = index.openCursor(range);
+
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (cursor) {
+          store.delete(cursor.primaryKey);
+          cursor.continue();
+        }
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  }
+
   /** Keep only the latest N messages for a chat to bound memory usage. */
   async trimMessages(chatId: number, keepLast = 10): Promise<void> {
     const db = this.db;

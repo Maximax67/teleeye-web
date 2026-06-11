@@ -49,15 +49,38 @@ function HomeContent() {
     onMessageVisible,
   } = useMessages(selectedChat, selectedThreadId, updateChatReadStatus);
 
+  // Chat selection
   const handleChatSelect = useCallback(
     (chat: Chat, pushUrl = true) => {
       if (selectedChat?.id === chat.id) return;
       setSelectedChat(chat);
       setShowMobileChat(true);
+      // Reset thread state when switching chats
+      setShowThreadsPanel(false);
+      setSelectedThreadId(null);
       if (pushUrl) router.push(`?chatId=${chat.id}`, { scroll: false });
     },
     [selectedChat, router],
   );
+
+  // Threads panel toggle
+  // When the panel is closed (via the header button), also clear the thread
+  // selection so messages are no longer filtered to a specific topic.
+  const handleToggleThreads = useCallback(() => {
+    setShowThreadsPanel((prev) => {
+      if (prev) {
+        // Panel is being closed — clear thread filter
+        setSelectedThreadId(null);
+      }
+      return !prev;
+    });
+  }, []);
+
+  // When the panel's own close button is pressed, same behaviour
+  const handleCloseThreadsPanel = useCallback(() => {
+    setShowThreadsPanel(false);
+    setSelectedThreadId(null);
+  }, []);
 
   useEffect(() => {
     if (!authLoading && !user) router.push('/login');
@@ -93,15 +116,19 @@ function HomeContent() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       handleChatSelect(chat, false);
     } else {
-      // Chat not in current list, try to fetch it directly
-      apiClient.getChat(chatId).then((fetchedChat) => {
-        if (fetchedChat) {
-          setSelectedChat(fetchedChat);
-          setShowMobileChat(true);
-        }
-      }).catch(() => {
-        // Chat not found or not accessible, ignore
-      });
+      apiClient
+        .getChat(chatId)
+        .then((fetchedChat) => {
+          if (fetchedChat) {
+            setSelectedChat(fetchedChat);
+            setShowMobileChat(true);
+            setShowThreadsPanel(false);
+            setSelectedThreadId(null);
+          }
+        })
+        .catch(() => {
+          // Chat not found or not accessible
+        });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialized, chats, searchParams]);
@@ -109,6 +136,8 @@ function HomeContent() {
   const handleBackToChats = useCallback(() => {
     setShowMobileChat(false);
     setSelectedChat(null);
+    setShowThreadsPanel(false);
+    setSelectedThreadId(null);
     router.push('/', { scroll: false });
   }, [router]);
 
@@ -126,7 +155,6 @@ function HomeContent() {
     [loadChats],
   );
 
-  // ── Loading screen ─────────────────────────────────────────────────────────
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white dark:bg-gray-900">
@@ -160,36 +188,38 @@ function HomeContent() {
           <ChatHeader
             selectedChat={selectedChat}
             onBack={handleBackToChats}
-            onShowThreads={() => setShowThreadsPanel(!showThreadsPanel)}
+            onShowThreads={handleToggleThreads}
             hasThreads={showThreadsPanel}
           />
 
-          <div className="relative flex flex-1 flex-col overflow-hidden">
-            <MessagesList
-              listItems={listItems}
-              messagesEndRef={messagesEndRef}
-              messagesContainerRef={messagesContainerRef}
-              isLoadingOlder={isLoadingOlder}
-              hasMoreOlder={hasMoreOlder}
-              isLoadingNewer={isLoadingNewer}
-              hasMoreNewer={hasMoreNewer}
-              scrollTarget={scrollTarget}
-              onScrolled={onScrolled}
-              loadOlderMessages={loadOlderMessages}
-              loadNewerMessages={loadNewerMessages}
-              onMessageVisible={onMessageVisible}
-            />
-            <MessageInput />
-          </div>
+          <div className="relative flex flex-1 overflow-hidden">
+            <div className="flex flex-1 flex-col overflow-hidden">
+              <MessagesList
+                listItems={listItems}
+                messagesEndRef={messagesEndRef}
+                messagesContainerRef={messagesContainerRef}
+                isLoadingOlder={isLoadingOlder}
+                hasMoreOlder={hasMoreOlder}
+                isLoadingNewer={isLoadingNewer}
+                hasMoreNewer={hasMoreNewer}
+                scrollTarget={scrollTarget}
+                onScrolled={onScrolled}
+                loadOlderMessages={loadOlderMessages}
+                loadNewerMessages={loadNewerMessages}
+                onMessageVisible={onMessageVisible}
+              />
+              <MessageInput />
+            </div>
 
-          {showThreadsPanel && (
-            <ThreadsPanel
-              chatId={selectedChat.id}
-              selectedThreadId={selectedThreadId}
-              onThreadSelect={setSelectedThreadId}
-              onClose={() => setShowThreadsPanel(false)}
-            />
-          )}
+            {showThreadsPanel && (
+              <ThreadsPanel
+                chatId={selectedChat.id}
+                selectedThreadId={selectedThreadId}
+                onThreadSelect={setSelectedThreadId}
+                onClose={handleCloseThreadsPanel}
+              />
+            )}
+          </div>
         </div>
       ) : (
         <div className="hidden flex-1 items-center justify-center bg-[#eae6df] md:flex dark:bg-gray-900">

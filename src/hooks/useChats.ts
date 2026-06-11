@@ -31,27 +31,44 @@ export function useChats(): UseChatsReturn {
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
 
-  // Refs to track current pagination state without stale closures
   const pageRef = useRef(1);
   const filtersRef = useRef<ChatFilters>({});
-  const loadingRef = useRef(false);
+  // isLoadingMore as a ref to avoid stale closures in loadMore
+  const isLoadingMoreRef = useRef(false);
+  // Request ID: each new fetch increments this. Stale responses are ignored.
+  const reqIdRef = useRef(0);
 
   const fetchPage = useCallback(async (
     page: number,
     filters: ChatFilters,
     append: boolean,
   ) => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
+    // Assign a unique ID to this request so we can discard stale responses
+    // when the user types quickly and multiple requests are in-flight.
+    const myReqId = ++reqIdRef.current;
 
-    if (!append) setLoading(true);
-    else setIsLoadingMore(true);
+    if (!append) {
+      setLoading(true);
+    } else {
+      if (isLoadingMoreRef.current) return;
+      isLoadingMoreRef.current = true;
+      setIsLoadingMore(true);
+    }
 
     try {
-      // For page 1 without filters, serve cache immediately
-      if (page === 1 && !append) {
+      const isUnfiltered =
+        !filters.search &&
+        !filters.chatTypes?.length &&
+        !filters.botIds?.length;
+
+      // Show cached chats immediately, but ONLY for the unfiltered first page.
+      // Showing the cache while a search is active would display irrelevant
+      // results while the API request completes.
+      if (page === 1 && !append && isUnfiltered) {
         const cached = await dbCache.getChats();
-        if (cached.length > 0) setChats(cached);
+        if (cached.length > 0 && myReqId === reqIdRef.current) {
+          setChats(cached);
+        }
       }
 
       const data = await apiClient.getChats(
@@ -62,11 +79,20 @@ export function useChats(): UseChatsReturn {
         filters.search,
       );
 
+      // Discard if a newer request has already been dispatched
+      if (myReqId !== reqIdRef.current) return;
+
       if (append) {
-        setChats(prev => [...prev, ...data.items]);
+        setChats(prev => {
+          // Deduplicate by chat id in case the backend returns overlap
+          const existingIds = new Set(prev.map(c => c.id));
+          const fresh = data.items.filter(c => !existingIds.has(c.id));
+          return [...prev, ...fresh];
+        });
       } else {
         setChats(data.items);
-        if (page === 1 && !filters.chatTypes?.length && !filters.botIds?.length && !filters.search) {
+        // Cache only unfiltered results so searches never pollute the cache
+        if (page === 1 && isUnfiltered) {
           dbCache.setChats(data.items);
         }
       }
@@ -76,22 +102,38 @@ export function useChats(): UseChatsReturn {
       pageRef.current = page;
       filtersRef.current = filters;
     } catch (err) {
+      if (myReqId !== reqIdRef.current) return;
       console.error('Failed to load chats:', err);
     } finally {
-      loadingRef.current = false;
-      if (!append) setLoading(false);
-      else setIsLoadingMore(false);
+      if (myReqId !== reqIdRef.current) return;
+      if (!append) {
+        setLoading(false);
+      } else {
+        isLoadingMoreRef.current = false;
+        setIsLoadingMore(false);
+      }
     }
   }, []);
 
   const loadChats = useCallback(async (filters: ChatFilters = {}) => {
+    const hasActiveFilters =
+      !!filters.search ||
+      !!filters.chatTypes?.length ||
+      !!filters.botIds?.length;
+
+    // Clear stale results immediately when switching to a filtered view so
+    // the previous unfiltered list does not flash before the response arrives.
+    if (hasActiveFilters) {
+      setChats([]);
+    }
+
     await fetchPage(1, filters, false);
   }, [fetchPage]);
 
   const loadMore = useCallback(async () => {
-    if (!hasMore || isLoadingMore || loadingRef.current) return;
+    if (!hasMore || isLoadingMoreRef.current) return;
     await fetchPage(pageRef.current + 1, filtersRef.current, true);
-  }, [hasMore, isLoadingMore, fetchPage]);
+  }, [hasMore, fetchPage]);
 
   // Update read status for a specific thread (or thread 1 by default)
   const updateChatReadStatus = useCallback((chatId: number, messageId: number, threadId = 1) => {
